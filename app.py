@@ -18,19 +18,28 @@ raw_file    = st.file_uploader("Raw Call Data (.csv)", type=["csv"], key="raw")
 agency_file = st.file_uploader("Agency Call Types (.csv)", type=["csv"], key="agency")
 launch_file = st.file_uploader("Launch Locations (.csv)", type=["csv"], key="launch")
 
-# Helpers -------------------------------------------------------
+st.caption("""
+**Required columns**
+
+**Raw Call Data:** `Time Call Entered Queue`, `Time First Unit Assigned`, `Time First Unit Arrived`, `Fixed Time Call Closed`, `Call Type`, `Call Priority`, `Lat`, `Lon`  
+(These can be Excel serials like `45474.05472`, plain seconds, or timestamps like `1/1/2024 1:20:48`.)
+
+**Agency Call Types:** `Call Type`, `DFR Response (Y/N)`, `Clearable (Y/N)`  
+**Launch Locations:** `Lat`, `Lon`
+""")
+
+# ---------------- Utilities ----------------
 def read_csv(file) -> pl.DataFrame:
-    """Read CSV safely (works for big files)."""
     b = file.read()
     file.seek(0)
     return pl.read_csv(io.BytesIO(b), infer_schema_length=2000)
 
 def to_seconds(col: pl.Series) -> pl.Series:
-    """Convert timestamps to seconds, handling Excel-serials or text timestamps."""
+    """Convert timestamps to seconds. Handles numeric seconds, Excel day-serials, or text timestamps."""
     if pl.datatypes.is_numeric(col.dtype):
         s = col.cast(pl.Float64)
         med = s.drop_nulls().median()
-        # Excel day serials often ~ 40k–60k range -> convert to seconds
+        # Excel day serials often ~ 40k–60k range → convert to seconds
         if med is not None and 20000 < med < 100000:
             return s * 86400.0
         return s
@@ -57,9 +66,9 @@ def haversine_min(df: pl.DataFrame, launches: pl.DataFrame) -> pl.Series:
         )
     return (pl.min_horizontal(exprs) if exprs else pl.lit(np.inf)).alias("dist_mi")
 
-def build_report(df_raw, df_agency, df_launch,
-                 fte_hours, officer_cost, cancel_rate, drone_speed, drone_range):
-    # Normalize columns and types
+def build_outputs(df_raw, df_agency, df_launch,
+                  fte_hours, officer_cost, cancel_rate, drone_speed, drone_range):
+    # ------- Normalize & validate -------
     need = ["Time Call Entered Queue","Time First Unit Assigned","Time First Unit Arrived",
             "Fixed Time Call Closed","Call Type","Call Priority","Lat","Lon"]
     missing = [c for c in need if c not in df_raw.columns]
@@ -94,7 +103,7 @@ def build_report(df_raw, df_agency, df_launch,
         pl.col("Lon").cast(pl.Float64).alias("Lon")
     ])
 
-    # Distances & ETAs
+    # ------- Distances & ETAs -------
     df_raw = df_raw.with_columns(haversine_min(df_raw, df_launch))
     df_raw = df_raw.with_columns((pl.col("dist_mi")/drone_speed*3600.0).alias("drone_eta_sec"))
     df_raw = df_raw.with_columns([
@@ -103,73 +112,110 @@ def build_report(df_raw, df_agency, df_launch,
         (pl.col("t_close")  - pl.col("t_arrive")).alias("on_scene_sec"),
     ])
 
-    # Filters
-    df_dfr = df_raw.filter(
+    # ------- DFR-only / In-range / Clearable tables -------
+    df_dfr_only = df_raw.filter(
         (pl.col("t_dispatch") > 0) &
         (pl.col("t_arrive")   > 0) &
         (pl.col("t_arrive")   != pl.col("t_create")) &  # remove self-initiated
         (pl.col("call_type").is_in(dfr_set))
     )
-    df_in  = df_dfr.filter(pl.col("dist_mi") <= drone_range)
-    df_clr = df_in.filter(pl.col("call_type").is_in(clr_set))
+    df_in_range = df_dfr_only.filter(pl.col("dist_mi") <= drone_range)
+    df_clearable = df_in_range.filter(pl.col("call_type").is_in(clr_set))
 
-    # Metrics
-    total_cfs        = df_raw.height
-    total_potential  = df_dfr.height
-    in_range_count   = df_in.height
-    clearable_count  = df_clr.height
+    # ------- Metrics for Report Values -------
+    total_cfs          = df_raw.height
+    total_potential    = df_dfr_only.height
+    in_range_count     = df_in_range.height
+    clearable_count    = df_clearable.height
 
-    avg_disp_patrol  = df_dfr["patrol_eta_sec"].mean()
-    avg_scene_all    = df_dfr["on_scene_sec"].mean()
-    avg_patrol_in    = df_in["create_to_arrive_sec"].mean()
-    avg_drone_resp   = df_in["drone_eta_sec"].mean()
-    first_on_pct     = (df_in.filter(pl.col("drone_eta_sec") < pl.col("create_to_arrive_sec")).height
-                        / max(in_range_count,1))
+    avg_disp_patrol    = df_dfr_only["patrol_eta_sec"].mean()
+    avg_scene_all_dfr  = df_dfr_only["on_scene_sec"].mean()
+    avg_patrol_in      = df_in_range["create_to_arrive_sec"].mean()
+    avg_drone_resp     = df_in_range["drone_eta_sec"].mean()
 
-    pct_decrease     = ((avg_patrol_in - avg_drone_resp)/avg_patrol_in) if (avg_patrol_in and avg_patrol_in>0) else 0.0
-    avg_scene_clear  = df_clr["on_scene_sec"].mean()
-    expected_cleared = round(in_range_count * cancel_rate)
-    total_time_clear = float(df_clr["on_scene_sec"].sum() or 0.0)
-    officers_fte     = ((avg_scene_clear or 0.0) * expected_cleared / 3600.0) / max(fte_hours,1)
-    roi_savings      = officers_fte * officer_cost
+    first_on_scene_frac = (
+        df_in_range.filter(pl.col("drone_eta_sec") < pl.col("create_to_arrive_sec")).height
+        / max(in_range_count, 1)
+    )
+    pct_decrease_frac = (
+        ((avg_patrol_in - avg_drone_resp)/avg_patrol_in) if (avg_patrol_in and avg_patrol_in>0) else 0.0
+    )
 
-    # Seconds → fractional days (for durations)
+    avg_scene_clearable = df_clearable["on_scene_sec"].mean()
+    expected_cleared    = round(in_range_count * cancel_rate)     # your “same rate over all flights” rule
+    total_time_clear    = float(df_clearable["on_scene_sec"].sum() or 0.0)
+    officers_fte        = ((avg_scene_clearable or 0.0) * expected_cleared / 3600.0) / max(fte_hours,1)
+    roi_savings         = officers_fte * officer_cost
+
+    # Seconds → fractional days for durations in the table
     def sec_to_days(x): return x/86400.0 if x is not None else None
 
-    rows = [
+    report_rows = [
         ("DFR Responses within Range", in_range_count, "#,##0"),
         ("Expected DFR Drone Response Times by Location", sec_to_days(avg_drone_resp), "[m]:ss"),
-        ("Expected First on Scene %", first_on_pct, "0%"),
+        ("Expected First on Scene %", first_on_scene_frac, "0%"),
         ("Expected CFS Cleared", expected_cleared, "#,##0"),
         ("Number of Officers - Force Multiplication", officers_fte, "0.00"),
         ("ROI from Potential Calls Cleared", roi_savings, "$#,##0"),
         ("Total CFS", total_cfs, "#,##0"),
         ("Total Potential DFR Calls", total_potential, "#,##0"),
         ("Avg Disp + Patrol Response Time to DFR Calls", sec_to_days(avg_disp_patrol), "[m]:ss"),
-        ("Avg Time on Scene ALL DFR Calls", sec_to_days(avg_scene_all), "[m]:ss"),
+        ("Avg Time on Scene ALL DFR Calls", sec_to_days(avg_scene_all_dfr), "[m]:ss"),
         ("Avg Disp + Patrol Response Time to In-Range Calls", sec_to_days(avg_patrol_in), "[m]:ss"),
-        ("Expected Decrease in Response Times", pct_decrease, "0%"),
+        ("Expected Decrease in Response Times", pct_decrease_frac, "0%"),
         ("Total clearable CFS within range", clearable_count, "#,##0"),
         ("Total time spent on Clearable CFS", sec_to_days(total_time_clear), "[h]:mm:ss"),
-        ("Avg Time on Scene – Clearable Calls", sec_to_days(avg_scene_clear), "[m]:ss"),
+        ("Avg Time on Scene – Clearable Calls", sec_to_days(avg_scene_clearable), "[m]:ss"),
     ]
-    return pl.DataFrame({"Metric":[r[0] for r in rows],
-                         "Value":[r[1] for r in rows],
-                         "Format":[r[2] for r in rows]})
+    df_report = pl.DataFrame({
+        "Metric":[r[0] for r in report_rows],
+        "Value":[r[1] for r in report_rows],
+        "Format":[r[2] for r in report_rows]
+    })
+
+    # Keep all original columns in the ESRI exports (includes Lat/Lon + extras)
+    return df_report, df_dfr_only, df_in_range, df_clearable
 
 # ---- Run button ----
 can_run = bool(raw_file and agency_file and launch_file)
 if st.button("Run Analysis", type="primary", disabled=not can_run):
-    with st.spinner("Crunching…"):
-        df_raw    = read_csv(raw_file)
-        df_agency = read_csv(agency_file)
-        df_launch = read_csv(launch_file)
-        report    = build_report(df_raw, df_agency, df_launch,
-                                 fte_hours, officer_cost, cancel_rate, drone_speed, drone_range)
-    st.success("Done.")
-    st.subheader("Report Values")
-    st.dataframe(report)
+    try:
+        with st.spinner("Crunching…"):
+            df_raw    = read_csv(raw_file)
+            df_agency = read_csv(agency_file)
+            df_launch = read_csv(launch_file)
 
-    st.download_button("Download Report Values (CSV)",
-        data=report.write_csv().encode("utf-8"),
-        file_name="report_values.csv", mime="text/csv")
+            report, dfr_only, dfr_in_range, dfr_clearable = build_outputs(
+                df_raw, df_agency, df_launch,
+                fte_hours, officer_cost, cancel_rate, drone_speed, drone_range
+            )
+
+        st.success("Done.")
+        st.subheader("Report Values")
+        st.dataframe(report)
+
+        # ---- Downloads ----
+        st.download_button("Download Report Values (CSV)",
+            data=report.write_csv().encode("utf-8"),
+            file_name="report_values.csv", mime="text/csv")
+
+        st.subheader("ESRI-ready CSVs")
+        st.caption("Each CSV includes Lat/Lon plus the computed columns (distance, drone_eta_sec, etc.).")
+        st.download_button("DFR Only (CSV)",
+            data=dfr_only.write_csv().encode("utf-8"),
+            file_name="dfr_only.csv", mime="text/csv")
+        st.download_button("DFR In Range (CSV)",
+            data=dfr_in_range.write_csv().encode("utf-8"),
+            file_name="dfr_in_range.csv", mime="text/csv")
+        st.download_button("DFR Clearable (CSV)",
+            data=dfr_clearable.write_csv().encode("utf-8"),
+            file_name="dfr_clearable.csv", mime="text/csv")
+
+        # Quick counts for sanity
+        col1, col2, col3 = st.columns(3)
+        col1.metric("DFR Only", dfr_only.height)
+        col2.metric("In Range", dfr_in_range.height)
+        col3.metric("Clearable", dfr_clearable.height)
+
+    except Exception as e:
+        st.error(str(e))
