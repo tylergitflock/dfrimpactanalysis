@@ -1,2 +1,2 @@
 [server]
-maxUploadSize = 500  # MB; raise if your CSVs are very large
+maxUploadSize = 2000  # MB; raise if your CSVs are very large
