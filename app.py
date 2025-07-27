@@ -294,7 +294,7 @@ st.header("Maps & Heatmaps")
 heat_radius = st.sidebar.slider("Heatmap radius", 1, 50, 15)
 heat_blur   = st.sidebar.slider("Heatmap blur",   1, 50, 25)
 
-def render_map(df_pts, show_circle=False, heat=False, title=""):
+def render_map(df_pts, show_circle=False, heat=False, title="", key=None):
     st.subheader(title)
     if show_circle and len(launch_coords):
         center = [float(launch_coords[0][0]), float(launch_coords[0][1])]
@@ -315,22 +315,70 @@ def render_map(df_pts, show_circle=False, heat=False, title=""):
         for _,r in df_pts.iterrows():
             folium.CircleMarker(location=(r["lat"],r["lon"]),
                                 radius=3, color="red", fill=True, fill_opacity=0.6).add_to(m)
-    st_folium(m, width=800, height=500)
+    st_folium(m, width=800, height=500, key=key)
 
-render_map(dfr_only, show_circle=False, heat=False, title="All DFR Calls (Scatter)")
-render_map(pd.DataFrame(), show_circle=True, heat=False, title="3.5-mile Drone Range")
-render_map(in_range, show_circle=False, heat=True,  title="Heatmap: In-Range Calls")
-render_map(in_range[in_range["priority"]=="1"], show_circle=False, heat=True, title="Heatmap: P1 In-Range")
+render_map(
+    dfr_only,
+    show_circle=False,
+    heat=False,
+    title="All DFR Calls (Scatter)",
+    key="map_all_scatter",
+)
+
+render_map(
+    pd.DataFrame(),
+    show_circle=True,
+    heat=False,
+    title="3.5-mile Drone Range",
+    key="map_range_circle",
+)
+
+render_map(
+    in_range,
+    show_circle=False,
+    heat=True,
+    title="Heatmap: In-Range Calls",
+    key="map_in_heat",
+)
+
+render_map(
+    in_range[in_range["priority"]=="1"],
+    show_circle=False,
+    heat=True,
+    title="Heatmap: P1 In-Range",
+    key="map_p1_heat",
+)
+
 if alpr_df is not None:
     alpr_plot = pd.DataFrame({
-        "lat": pd.to_numeric(alpr_df.iloc[:,1],errors="coerce"),
-        "lon": pd.to_numeric(alpr_df.iloc[:,2],errors="coerce")
+        "lat": pd.to_numeric(alpr_df.iloc[:,1], errors="coerce"),
+        "lon": pd.to_numeric(alpr_df.iloc[:,2], errors="coerce")
     }).dropna()
-    render_map(alpr_plot, show_circle=False, heat=True, title="Heatmap: ALPR Locations")
-render_map(clearable, show_circle=False, heat=True, title="Heatmap: Clearable Calls")
+    render_map(
+        alpr_plot,
+        show_circle=False,
+        heat=True,
+        title="Heatmap: ALPR Locations",
+        key="map_alpr_heat",
+    )
+
+render_map(
+    clearable,
+    show_circle=False,
+    heat=True,
+    title="Heatmap: Clearable Calls",
+    key="map_clearable_heat",
+)
+
 if audio_df is not None:
     audio_plot = pd.DataFrame({
-        "lat": pd.to_numeric(audio_df.iloc[:,2],errors="coerce"),
-        "lon": pd.to_numeric(audio_df.iloc[:,3],errors="coerce")
+        "lat": pd.to_numeric(audio_df.iloc[:,2], errors="coerce"),
+        "lon": pd.to_numeric(audio_df.iloc[:,3], errors="coerce")
     }).dropna()
-    render_map(audio_plot, show_circle=False, heat=True, title="Heatmap: Audio Locations")
+    render_map(
+        audio_plot,
+        show_circle=False,
+        heat=True,
+        title="Heatmap: Audio Locations",
+        key="map_audio_heat",
+    )
