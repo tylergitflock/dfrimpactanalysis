@@ -207,12 +207,23 @@ df_all = pd.DataFrame({
     "priority": raw_df[col_pri].astype(str).str.strip()
 })
 
-# DFR Only: flagged Y and not self-initiated (arrive != create)
-mask_dfr = df_all["call_type_up"].isin(dfr_map) & df_all["create_dt"].notna() & df_all["arrive_dt"].notna() & (df_all["arrive_dt"] != df_all["create_dt"])
+# 1) Compute patrol_sec = arrive - create in seconds
+df_all["patrol_sec"] = (df_all["arrive_dt"] - df_all["create_dt"]).dt.total_seconds()
+
+# 2) DFR Only: must be flagged Y, have valid times, AND patrol_sec > 0
+mask_dfr = (
+    df_all["call_type_up"].isin(dfr_map)
+    & df_all["patrol_sec"].notna()
+    & (df_all["patrol_sec"] > 0)
+)
 dfr_only = df_all.loc[mask_dfr].copy()
 
-# In Range: DFR Only + within drone_range
-in_range = dfr_only.loc[(~np.isnan(dfr_only["dist_mi"])) & (dfr_only["dist_mi"] <= drone_range)].copy()
+# 3) In Range: DFR Only + valid distance + within drone_range
+mask_in_range = (
+    dfr_only["dist_mi"].notna()
+    & (dfr_only["dist_mi"] <= drone_range)
+)
+in_range = dfr_only.loc[mask_in_range].copy()
 
 # Clearable: In Range + clearable Y
 mask_clr = in_range["call_type_up"].isin(clr_map)
