@@ -3,6 +3,9 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
+# ─── PROGRESS BAR (initialize at 0%) ─────────────────────────────────
+progress = st.sidebar.progress(0)
+
 st.set_page_config(page_title="DFR Impact Analysis", layout="wide")
 
 # -----------------------------
