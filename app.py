@@ -84,30 +84,60 @@ with st.sidebar.expander("2) Assumptions", expanded=False):
 progress.progress(20)
 
 # ─── 3) SIDEBAR: LAUNCH LOCATIONS ─────────────────────────────────────────────
-if launch_file:
-    launch_df = pd.read_csv(launch_file)
-else:
-    st.sidebar.write("Or enter Launch Locations manually:")
-    launch_df = st.sidebar.experimental_data_editor(
-        pd.DataFrame(columns=["Location Name","Lat","Lon"]),
-        num_rows="dynamic", use_container_width=True
-    )
-if launch_df.shape[1] < 3:
-    st.error("Launch Locations must have columns: Location Name, Lat, Lon.")
-    st.stop()
+with st.sidebar.expander("3) Launch Locations", expanded=True):
+    launch_file = st.file_uploader("• Upload Launch Locations CSV", type=["csv"])
+    if launch_file is not None:
+        launch_df = pd.read_csv(launch_file)
+    else:
+        st.write("Or enter Launch Locations manually:")
+        # Use st.experimental_data_editor, _not_ st.sidebar.experimental_data_editor
+        launch_df = st.experimental_data_editor(
+            pd.DataFrame(columns=["Location Name","Lat","Lon"]),
+            num_rows="dynamic", 
+            use_container_width=True
+        )
+    if launch_df.shape[1] < 3:
+        st.error("Launch Locations must have columns: Location Name, Lat, Lon.")
+        st.stop()
 progress.progress(30)
 
+
 # ─── 4) SIDEBAR: AGENCY CALL TYPES ────────────────────────────────────────────
-agency_file = st.sidebar.file_uploader("Agency Call Types CSV (optional)", type=["csv"])
-if agency_file:
-    agency_df = pd.read_csv(agency_file)
-    req = {"Call Type","DFR Response (Y/N)","Clearable (Y/N)"}
-    if not req.issubset(agency_df.columns):
-        st.error(f"Agency CSV must include: {req}")
-        st.stop()
-else:
-    # read raw types once we have raw_df
-    agency_df = None
+with st.sidebar.expander("4) Agency Call Types", expanded=True):
+    agency_file = st.file_uploader("• Upload Agency Call Types CSV (optional)", type=["csv"])
+    if agency_file is not None:
+        agency_df = pd.read_csv(agency_file)
+        required = {"Call Type","DFR Response (Y/N)","Clearable (Y/N)"}
+        if not required.issubset(agency_df.columns):
+            st.error(f"Agency CSV must include columns: {required}")
+            st.stop()
+    else:
+        # build default and let user edit _via_ st.experimental_data_editor
+        types = sorted(raw_df["Call Type"].astype(str).unique())
+        base = pd.DataFrame({
+            "Call Type": types,
+            "DFR Response (Y/N)": False,
+            "Clearable (Y/N)": False
+        })
+        agency_df = st.experimental_data_editor(
+            base, 
+            num_rows="dynamic", 
+            use_container_width=True
+        )
+
+# build your lookup sets as before…
+dfr_map = set(
+    agency_df.loc[
+        agency_df["DFR Response (Y/N)"].astype(str).str.upper() == "Y",
+        "Call Type"
+    ].str.upper().str.strip()
+)
+clr_map = set(
+    agency_df.loc[
+        agency_df["Clearable (Y/N)"].astype(str).str.upper() == "Y",
+        "Call Type"
+    ].str.upper().str.strip()
+)
 progress.progress(35)
 
 # ─── 5) SIDEBAR: ALPR & AUDIO ─────────────────────────────────────────────────
