@@ -510,3 +510,127 @@ with st.expander("Diagnostics (click to expand)"):
         "avg_drone_p1": avg_drone_p1,
         "avg_scene_clearable": avg_scene_clearable,
     })
+
+import folium
+from folium.plugins import HeatMap
+from streamlit_folium import st_folium
+
+# ─── Sidebar: heatmap controls ────────────────────────────────────────────────
+st.sidebar.header("3) Heatmap Settings")
+heat_radius = st.sidebar.slider(
+    "Heatmap point radius", min_value=1, max_value=50, value=15, help="Radius of each point"
+)
+heat_blur = st.sidebar.slider(
+    "Heatmap blur", min_value=1, max_value=50, value=25, help="Amount of blur"
+)
+
+# ─── Maps ────────────────────────────────────────────────────────────────────
+def render_map(df_points, show_circles=False, heatmap=False, title="Map"):
+    st.subheader(title)
+    # center on first launch or mean of points
+    if show_circles and launch_coords.size:
+        center = [float(launch_coords[0][0]), float(launch_coords[0][1])]
+    elif not df_points.empty:
+        center = [float(df_points["lat"].mean()), float(df_points["lon"].mean())]
+    else:
+        center = [39.0, -98.5]  # fallback
+
+    m = folium.Map(location=center, zoom_start=10)
+
+    # draw drone‐range circles
+    if show_circles:
+        meters_per_mile = 1609.34
+        for la, lo in launch_coords:
+            folium.Circle(
+                location=(float(la), float(lo)),
+                radius=drone_range * meters_per_mile,
+                color="blue",
+                weight=2,
+                fill=False,
+            ).add_to(m)
+
+    # add either markers or a heatmap
+    if heatmap and not df_points.empty:
+        heat_data = df_points[["lat","lon"]].dropna().values.tolist()
+        HeatMap(heat_data, radius=heat_radius, blur=heat_blur).add_to(m)
+    else:
+        # scatter points
+        for _, row in df_points.iterrows():
+            folium.CircleMarker(
+                location=(row["lat"], row["lon"]),
+                radius=3,
+                color="red",
+                fill=True,
+                fill_opacity=0.6,
+            ).add_to(m)
+
+    st_folium(m, width=800, height=500)
+
+# 1) Total DFR calls city-wide (scatter of ALL DFR-only points)
+render_map(
+    df_points=dfr_only,
+    show_circles=False,
+    heatmap=False,
+    title="All DFR Calls (City-wide)"
+)
+
+# 2) Just the drone-range circles (no points, no heat)
+render_map(
+    df_points=pd.DataFrame(),  # empty
+    show_circles=True,
+    heatmap=False,
+    title="3.5-mile Drone Range around Launch Locations"
+)
+
+# 3) Heatmap of DFR calls within range
+render_map(
+    df_points=in_range,
+    show_circles=False,
+    heatmap=True,
+    title="Heatmap: All In-Range DFR Calls"
+)
+
+# 4) Heatmap of priority-1 in-range calls
+render_map(
+    df_points=in_range.loc[in_range["priority"]=="1"],
+    show_circles=False,
+    heatmap=True,
+    title="Heatmap: Priority-1 In-Range Calls"
+)
+
+# 5) Heatmap of ALPR locations
+# we already parsed alpr_dist, so reconstruct a small DF
+if alpr_df is not None:
+    alpr_plot = pd.DataFrame({
+        "lat": pd.to_numeric(alpr_df.iloc[:,1], errors="coerce"),
+        "lon": pd.to_numeric(alpr_df.iloc[:,2], errors="coerce")
+    })
+    render_map(
+        df_points=alpr_plot,
+        show_circles=False,
+        heatmap=True,
+        title="Heatmap: ALPR Locations"
+    )
+
+# 6) Heatmap of clearable calls within range
+render_map(
+    df_points=clearable,
+    show_circles=False,
+    heatmap=True,
+    title="Heatmap: Clearable In-Range Calls"
+)
+
+# 7) Heatmap of Audio Hit Locations
+if audio_df is not None:
+    # build a small DataFrame of lat/lon from your Audio Hits CSV
+    audio_plot = pd.DataFrame({
+        "lat": pd.to_numeric(audio_df.iloc[:,2], errors="coerce"),
+        "lon": pd.to_numeric(audio_df.iloc[:,3], errors="coerce")
+    }).dropna()
+
+    render_map(
+        df_points=audio_plot,
+        show_circles=False,
+        heatmap=True,
+        title="Heatmap: Audio Locations"
+    )
