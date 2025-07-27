@@ -77,20 +77,21 @@ raw_df = pd.read_csv(raw_file)
 progress.progress(10)
 
 # 2) Launch Locations (upload or manual)
-st.sidebar.header("2) Launch Locations")
-launch_file = st.sidebar.file_uploader("Upload Launch Locations CSV", type=["csv"])
-if launch_file:
-    launch_df = pd.read_csv(launch_file)
-else:
-    launch_df = st.sidebar.experimental_data_editor(
-        pd.DataFrame(columns=["Location Name","Lat","Lon"]),
-        num_rows="dynamic",
-        use_container_width=True
-    )
-# simple sanity check
-if launch_df.shape[1] < 3:
-    st.sidebar.error("Launch Locations needs columns: Location Name, Lat, Lon.")
-    st.stop()
+with st.sidebar.expander("2) Launch Locations", expanded=True):
+    launch_file = st.file_uploader("Upload Launch Locations CSV", type=["csv"])
+    if launch_file:
+        launch_df = pd.read_csv(launch_file)
+    else:
+        st.write("Or enter Launch Locations manually:")
+        # ← call on st, not st.sidebar
+        launch_df = st.experimental_data_editor(
+            pd.DataFrame(columns=["Location Name","Lat","Lon"]),
+            num_rows="dynamic",
+            use_container_width=True
+        )
+    if launch_df.shape[1] < 3:
+        st.error("Launch Locations needs columns: Location Name, Lat, Lon.")
+        st.stop()
 progress.progress(30)
 
 # 3) Agency Call Types (upload or manual)
