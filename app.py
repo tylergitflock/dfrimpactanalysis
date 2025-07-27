@@ -64,86 +64,74 @@ def average(arr):
     nums = [v for v in arr if isinstance(v,(int,float)) and np.isfinite(v)]
     return float(np.mean(nums)) if nums else np.nan
 
-# ─── 0) PROGRESS BAR ──────────────────────────────────────────────────────────
+# ─── SIDEBAR + FILE LOADS ────────────────────────────────────────────────────
 progress = st.sidebar.progress(0)
 
-# ─── 1) SIDEBAR: UPLOAD RAW DATA ──────────────────────────────────────────────
-st.title("DFR Impact Analysis")
-with st.sidebar.expander("1) Raw Call Data & Launch Locations", expanded=True):
-    raw_file    = st.file_uploader("Raw Call Data CSV", type=["csv"])
-    launch_file = st.file_uploader("Launch Locations CSV (optional)", type=["csv"])
+# 1) Raw Call Data (required)
+st.sidebar.header("1) Raw Call Data")
+raw_file = st.sidebar.file_uploader("Upload Raw Call Data CSV", type=["csv"])
+if not raw_file:
+    st.sidebar.warning("Please upload Raw Call Data to proceed.")
+    st.stop()
+raw_df = pd.read_csv(raw_file)
 progress.progress(10)
 
-# ─── 2) SIDEBAR: ASSUMPTIONS ─────────────────────────────────────────────────
-with st.sidebar.expander("2) Assumptions", expanded=False):
-    fte_hours    = st.number_input("Full Time Work Year (hours)", value=2080, step=1)
-    officer_cost = st.number_input("Officer Cost per FTE ($)", value=127940, step=1000, format="%d")
-    cancel_rate  = st.number_input("Drone Cancellation Rate (0–1)", value=0.11, step=0.01, format="%.2f")
-    drone_speed  = st.number_input("Drone Speed (mph)", value=51.0, step=1.0)
-    drone_range  = st.number_input("Drone Range (miles)", value=3.5, step=0.1)
-progress.progress(20)
-
-# ─── 3) SIDEBAR: LAUNCH LOCATIONS ─────────────────────────────────────────────
-with st.sidebar.expander("3) Launch Locations", expanded=True):
-    launch_file = st.file_uploader("• Upload Launch Locations CSV", type=["csv"])
-    if launch_file is not None:
-        launch_df = pd.read_csv(launch_file)
-    else:
-        st.write("Or enter Launch Locations manually:")
-        # Use st.experimental_data_editor, _not_ st.sidebar.experimental_data_editor
-        launch_df = st.experimental_data_editor(
-            pd.DataFrame(columns=["Location Name","Lat","Lon"]),
-            num_rows="dynamic", 
-            use_container_width=True
-        )
-    if launch_df.shape[1] < 3:
-        st.error("Launch Locations must have columns: Location Name, Lat, Lon.")
-        st.stop()
+# 2) Launch Locations (upload or manual)
+st.sidebar.header("2) Launch Locations")
+launch_file = st.sidebar.file_uploader("Upload Launch Locations CSV", type=["csv"])
+if launch_file:
+    launch_df = pd.read_csv(launch_file)
+else:
+    launch_df = st.sidebar.experimental_data_editor(
+        pd.DataFrame(columns=["Location Name","Lat","Lon"]),
+        num_rows="dynamic",
+        use_container_width=True
+    )
+# simple sanity check
+if launch_df.shape[1] < 3:
+    st.sidebar.error("Launch Locations needs columns: Location Name, Lat, Lon.")
+    st.stop()
 progress.progress(30)
 
-
-# ─── 4) SIDEBAR: AGENCY CALL TYPES ────────────────────────────────────────────
-with st.sidebar.expander("4) Agency Call Types", expanded=True):
-    agency_file = st.file_uploader("• Upload Agency Call Types CSV (optional)", type=["csv"])
-    if agency_file is not None:
-        agency_df = pd.read_csv(agency_file)
-        required = {"Call Type","DFR Response (Y/N)","Clearable (Y/N)"}
-        if not required.issubset(agency_df.columns):
-            st.error(f"Agency CSV must include columns: {required}")
-            st.stop()
-    else:
-        # build default and let user edit _via_ st.experimental_data_editor
-        types = sorted(raw_df["Call Type"].astype(str).unique())
-        base = pd.DataFrame({
+# 3) Agency Call Types (upload or manual)
+st.sidebar.header("3) Agency Call Types")
+agency_file = st.sidebar.file_uploader("Upload Agency Call Types CSV", type=["csv"])
+if agency_file:
+    agency_df = pd.read_csv(agency_file)
+    required = {"Call Type","DFR Response (Y/N)","Clearable (Y/N)"}
+    if not required.issubset(agency_df.columns):
+        st.sidebar.error(f"Agency CSV must include columns: {required}")
+        st.stop()
+else:
+    # auto‐extract unique call types from raw_df
+    types = sorted(raw_df["Call Type"].astype(str).unique())
+    agency_df = st.sidebar.experimental_data_editor(
+        pd.DataFrame({
             "Call Type": types,
-            "DFR Response (Y/N)": False,
-            "Clearable (Y/N)": False
-        })
-        agency_df = st.experimental_data_editor(
-            base, 
-            num_rows="dynamic", 
-            use_container_width=True
-        )
+            "DFR Response (Y/N)": [False]*len(types),
+            "Clearable (Y/N)"    : [False]*len(types),
+        }),
+        num_rows="dynamic",
+        use_container_width=True
+    )
+progress.progress(50)
 
-# build your lookup sets as before…
-dfr_map = set(
-    agency_df.loc[
-        agency_df["DFR Response (Y/N)"].astype(str).str.upper() == "Y",
-        "Call Type"
-    ].str.upper().str.strip()
-)
-clr_map = set(
-    agency_df.loc[
-        agency_df["Clearable (Y/N)"].astype(str).str.upper() == "Y",
-        "Call Type"
-    ].str.upper().str.strip()
-)
-progress.progress(35)
+# 4) Assumptions
+st.sidebar.header("4) Assumptions")
+fte_hours    = st.sidebar.number_input("Full Time Work Year (hours)", value=2080, step=1)
+officer_cost = st.sidebar.number_input("Officer Cost per FTE ($)",   value=127940, step=1000, format="%d")
+cancel_rate  = st.sidebar.number_input("Drone Cancellation Rate (0–1)", value=0.11, step=0.01, format="%.2f")
+drone_speed  = st.sidebar.number_input("Drone Speed (mph)",           value=51.0,   step=1.0)
+drone_range  = st.sidebar.number_input("Drone Range (miles)",         value=3.5,    step=0.1)
+progress.progress(70)
 
-# ─── 5) SIDEBAR: ALPR & AUDIO ─────────────────────────────────────────────────
-alpr_file  = st.sidebar.file_uploader("ALPR Data CSV (optional)", type=["csv"])
-audio_file = st.sidebar.file_uploader("Audio Hits CSV (optional)", type=["csv"])
-progress.progress(40)
+# 5) ALPR & Audio (optional)
+st.sidebar.header("5) ALPR & Audio (optional)")
+alpr_file  = st.sidebar.file_uploader("Upload ALPR Data CSV",   type=["csv"])
+audio_file = st.sidebar.file_uploader("Upload Audio Hits CSV",  type=["csv"])
+progress.progress(80)
+
+# ─── now drop into your existing parsing → filters → metrics → maps code ─────
 
 # ─── 6) LOAD RAW CALL DATA ───────────────────────────────────────────────────
 if not raw_file:
