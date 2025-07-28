@@ -80,6 +80,13 @@ if not raw_file:
     st.sidebar.warning("Please upload Raw Call Data to proceed.")
     st.stop()
 raw_df = pd.read_csv(raw_file)
+# ── normalize raw Call Type for lookup ──────────────────────────────────────
+raw_df["Call Type"] = (
+    raw_df["Call Type"]
+      .astype(str)
+      .str.strip()
+      .str.upper()
+)
 progress.progress(10)
 
 # ─── 2) Launch Locations ────────────────────────────────────────────────────
@@ -174,10 +181,16 @@ st.sidebar.dataframe(agency_df.head())
 
 progress.progress(50)
 
-
 agency_df["Call Type"]          = agency_df["Call Type"].astype(str).str.strip().str.upper()
 agency_df["DFR Response (Y/N)"] = agency_df["DFR Response (Y/N)"].astype(str).str.strip().str.upper()
 agency_df["Clearable (Y/N)"]    = agency_df["Clearable (Y/N)"].astype(str).str.strip().str.upper()
+
+# ── DEBUG: show how many “Y” flags we actually loaded ───────────────────────
+dfr_yes = (agency_df["DFR Response (Y/N)"] == "Y").sum()
+clr_yes = (agency_df["Clearable (Y/N)"]    == "Y").sum()
+st.sidebar.write(f"🚩 DFR‑Response=Y count: {dfr_yes}")
+st.sidebar.write(f"🚩 Clearable=Y count: {clr_yes}")
+
 
 # ─── DEBUG: list raw vs agency call types ─────────────────────────────────
 st.sidebar.subheader("➤ Raw Call Types Found")
