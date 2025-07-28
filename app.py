@@ -396,17 +396,17 @@ def render_map(
 
     m = folium.Map(location=center, zoom_start=10)
 
-# Draw drone range circles only — no icons or markers
-if show_circle and launch_coords is not None:
-    for la, lo in launch_coords:
-        folium.Circle(
-            location=(la, lo),
-            radius=drone_range * 1609.34,
-            color="blue",
-            fill=False
-        ).add_to(m)
+    # ✅ Draw drone range circles only — no icons or markers
+    if show_circle and launch_coords is not None:
+        for la, lo in launch_coords:
+            folium.Circle(
+                location=(la, lo),
+                radius=drone_range * 1609.34,
+                color="blue",
+                fill=False
+            ).add_to(m)
 
-    # Add heatmap or points
+    # ✅ Add heatmap or individual dots
     if heat and not df_pts.empty:
         HeatMap(
             df_pts[["lat","lon"]].values.tolist(),
@@ -414,10 +414,13 @@ if show_circle and launch_coords is not None:
             blur=heat_blur
         ).add_to(m)
     else:
-        for _,r in df_pts.iterrows():
+        for _, r in df_pts.iterrows():
             folium.CircleMarker(
-                location=(r["lat"],r["lon"]),
-                radius=3, color="red", fill=True, fill_opacity=0.6
+                location=(r["lat"], r["lon"]),
+                radius=3,
+                color="red",
+                fill=True,
+                fill_opacity=0.6
             ).add_to(m)
 
     st_folium(m, width=800, height=500, key=key)
