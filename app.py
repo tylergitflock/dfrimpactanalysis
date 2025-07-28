@@ -361,7 +361,7 @@ def render_map(
 ):
     
     st.subheader(title)
-   if show_circle and launch_coords and len(launch_coords):
+    if show_circle and launch_coords and len(launch_coords):
         center = [float(launch_coords[0][0]), float(launch_coords[0][1])]
     elif not df_pts.empty:
         center = [float(df_pts["lat"].mean()), float(df_pts["lon"].mean())]
