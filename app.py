@@ -271,6 +271,29 @@ dfr_map = set(agency_df.loc[agency_df["DFR Response (Y/N)"].astype(str).str.uppe
               .str.upper().str.strip())
 clr_map = set(agency_df.loc[agency_df["Clearable (Y/N)"].astype(str).str.upper()=="Y","Call Type"]
               .str.upper().str.strip())
+# ── DEBUG: why no matches? ────────────────────────────────────────────────
+st.sidebar.subheader("🔍 DFR/Clearable Debug")
+
+# 1) What Call‑Types did we pick up?
+st.sidebar.write("DFR map (Y flags):", sorted(dfr_map))
+st.sidebar.write("Clearable map (Y flags):", sorted(clr_map))
+
+# 2) Sample raw types
+raw_uniques = raw_df["Call Type"].dropna().unique().tolist()
+st.sidebar.write("Sample Raw Call Types:", raw_uniques[:10], "...(+{} more)".format(max(0, len(raw_uniques)-10)))
+
+# 3) How many raw rows even pass the patrol_sec>0 filter?
+valid = df_all["patrol_sec"] > 0
+st.sidebar.write("Rows with patrol_sec>0:", int(valid.sum()))
+
+# 4) Of those, how many match a DFR type?
+dfr_matches = df_all.loc[valid, "call_type_up"].isin(dfr_map).sum()
+st.sidebar.write("Rows matching DFR map:", int(dfr_matches))
+
+# 5) And how many then match Clearable?
+clr_matches = df_all.loc[valid, "call_type_up"].isin(clr_map).sum()
+st.sidebar.write("Rows matching Clearable map:", int(clr_matches))
+
 
 dfr_only  = df_all[df_all["call_type_up"].isin(dfr_map) & df_all["patrol_sec"].gt(0)].copy()
 in_range  = dfr_only[dfr_only["dist_mi"].le(drone_range)].copy()
