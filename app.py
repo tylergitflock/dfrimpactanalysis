@@ -93,6 +93,23 @@ else:
     st.sidebar.write("Or enter manually:")
     launch_df = _EDITOR(pd.DataFrame(columns=["Location Name","Lat","Lon"]),
                         num_rows="dynamic", use_container_width=True)
+from geopy.geocoders import Nominatim
+from geopy.extra.rate_limiter import RateLimiter
+
+# If they provided addresses instead of lat/lon, fill in Lat & Lon:
+if "Address" in launch_df.columns and not {"Lat","Lon"}.issubset(launch_df.columns):
+    geolocator = Nominatim(user_agent="dfrimpact")
+    geocode = RateLimiter(geolocator.geocode, min_delay_seconds=1)
+
+    @st.cache_data(show_spinner=False)
+    def lookup(addr):
+        loc = geocode(addr)
+        return (loc.latitude, loc.longitude) if loc else (None, None)
+
+    launch_df[["Lat","Lon"]] = launch_df["Address"].apply(
+        lambda a: pd.Series(lookup(a))
+    )
+
 if launch_df.shape[1] < 3:
     st.sidebar.error("Launch Locations needs cols: Location Name, Lat, Lon.")
     st.stop()
