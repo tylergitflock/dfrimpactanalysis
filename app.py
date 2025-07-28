@@ -396,23 +396,15 @@ def render_map(
 
     m = folium.Map(location=center, zoom_start=10)
 
-    # Draw drone range circles and markers
-    if show_circle and launch_coords is not None:
-        for la, lo in launch_coords:
-            folium.Circle(
-                location=(la, lo),
-                radius=drone_range * 1609.34,
-                color="blue",
-                fill=False
-            ).add_to(m)
-            folium.map.Marker(
-    location=(la, lo),
-    icon=folium.DivIcon(
-        icon_size=(12, 12),
-        icon_anchor=(6, 6),
-        html='<div style="font-size:16px; color: black;">⬤</div>'
-    )
-).add_to(m)
+# Draw drone range circles only — no icons or markers
+if show_circle and launch_coords is not None:
+    for la, lo in launch_coords:
+        folium.Circle(
+            location=(la, lo),
+            radius=drone_range * 1609.34,
+            color="blue",
+            fill=False
+        ).add_to(m)
 
     # Add heatmap or points
     if heat and not df_pts.empty:
@@ -433,7 +425,7 @@ def render_map(
 # Scatter of all DFR calls
 render_map(
     dfr_only,
-    heat=False,
+    heat=True,
     title="All DFR Calls (Scatter)",
     key="map_all_scatter",
     show_circle=True,
