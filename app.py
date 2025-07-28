@@ -152,26 +152,49 @@ if not {"Lat","Lon"}.issubset(launch_df.columns):
 
 progress.progress(30)
 
+# ─── 3) Agency Call Types ──────────────────────────────────────────────────
 st.sidebar.header("3) Agency Call Types")
-agency_file = st.sidebar.file_uploader("Upload Agency Call Types CSV", type=["csv"])
-if agency_file:
-    agency_df = pd.read_csv(agency_file)
-    req = {"Call Type","DFR Response (Y/N)","Clearable (Y/N)"}
-    if not req.issubset(agency_df.columns):
-        st.sidebar.error(f"Agency CSV must include {req}")
-        st.stop()
+
+mode_ag = st.sidebar.radio(
+    "How to supply your Agency Call Types?",
+    ("Upload CSV", "Manual Entry"),
+    key="mode_ag"
+)
+
+if mode_ag == "Upload CSV":
+    ag_file = st.sidebar.file_uploader(
+        "Upload Agency Call Types CSV", 
+        type=["csv"], 
+        key="agency_csv"
+    )
+    if ag_file:
+        agency_df = pd.read_csv(ag_file)
+    else:
+        agency_df = None
 else:
-    if _EDITOR is None:
-        st.sidebar.error("Upgrade Streamlit or upload Agency CSV.")
-        st.stop()
-    types = sorted(raw_df["Call Type"].astype(str).unique())
-    base = pd.DataFrame({
-        "Call Type": types,
-        "DFR Response (Y/N)": [False]*len(types),
-        "Clearable (Y/N)"    : [False]*len(types),
-    })
-    agency_df = _EDITOR(base, num_rows="dynamic", use_container_width=True)
+    # manual table with checkboxes/Y/N entries
+    agency_df = st.sidebar.experimental_data_editor(
+        pd.DataFrame(columns=[
+            "Call Type",
+            "DFR Response (Y/N)",
+            "Clearable (Y/N)"
+        ]),
+        num_rows="dynamic",
+        use_container_width=True,
+        key="agency_editor"
+    )
+
+# validate that we got something
+if agency_df is None or agency_df.shape[0] == 0:
+    st.sidebar.error("Please upload or enter at least one Agency Call Type.")
+    st.stop()
+
+# DEBUG: show what loaded
+st.sidebar.subheader("Agency Call Types Preview")
+st.sidebar.dataframe(agency_df)
+
 progress.progress(50)
+
 
 st.sidebar.header("4) Assumptions")
 fte_hours    = st.sidebar.number_input("Full Time Work Year (hrs)", value=2080, step=1)
