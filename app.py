@@ -349,6 +349,7 @@ with c3:
 progress.progress(100)
 
 # ─── 6) MAPS & HEATMAPS ──────────────────────────────────────────────────────
+# Ensure launch_coords is defined before we use it
 try:
     launch_coords = launch_df[["Lat","Lon"]].astype(float).values
 except Exception:
@@ -373,38 +374,43 @@ def render_map(
 ):
     st.subheader(title)
 
-    if show_circle and launch_coords and len(launch_coords):
+    if show_circle and launch_coords is not None and len(launch_coords):
         center = [float(launch_coords[0][0]), float(launch_coords[0][1])]
     elif not df_pts.empty:
         center = [float(df_pts["lat"].mean()), float(df_pts["lon"].mean())]
     else:
-        center = [0.0, 0.0]  # fallback
+        center = [0.0, 0.0]
 
-    # You can paste the rest of your map rendering code below here
     m = folium.Map(location=center, zoom_start=10)
-    # ── draw the 3.5 mi drone range circle + epicenter icon ────────────────
-    for la, lo in launch_coords:
-        folium.Circle(
-            location=(la, lo),
-            radius=drone_range * 1609.34,
-            color="blue",
-            fill=False
-        ).add_to(m)
-        folium.Marker(
-            location=(la, lo),
-            icon=folium.Icon(icon="info-sign")
-        ).add_to(m)
+
+    # Draw drone range circles and markers
+    if show_circle and launch_coords is not None:
+        for la, lo in launch_coords:
+            folium.Circle(
+                location=(la, lo),
+                radius=drone_range * 1609.34,
+                color="blue",
+                fill=False
+            ).add_to(m)
+            folium.Marker(
+                location=(la, lo),
+                icon=folium.Icon(icon="info-sign")
+            ).add_to(m)
+
+    # Add heatmap or points
     if heat and not df_pts.empty:
         HeatMap(
             df_pts[["lat","lon"]].values.tolist(),
             radius=heat_radius,
             blur=heat_blur
         ).add_to(m)
-
     else:
         for _,r in df_pts.iterrows():
-            folium.CircleMarker(location=(r["lat"],r["lon"]),
-                                radius=3, color="red", fill=True, fill_opacity=0.6).add_to(m)
+            folium.CircleMarker(
+                location=(r["lat"],r["lon"]),
+                radius=3, color="red", fill=True, fill_opacity=0.6
+            ).add_to(m)
+
     st_folium(m, width=800, height=500, key=key)
 
 # Scatter of all DFR calls
