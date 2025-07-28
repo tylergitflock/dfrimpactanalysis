@@ -154,46 +154,26 @@ progress.progress(30)
 
 # ─── 3) Agency Call Types ──────────────────────────────────────────────────
 st.sidebar.header("3) Agency Call Types")
-
-mode_ag = st.sidebar.radio(
-    "How to supply your Agency Call Types?",
-    ("Upload CSV", "Manual Entry"),
-    key="mode_ag"
+ag_file = st.sidebar.file_uploader(
+    "Upload Agency Call Types CSV", 
+    type=["csv"], 
+    key="agency_csv"
 )
-
-if mode_ag == "Upload CSV":
-    ag_file = st.sidebar.file_uploader(
-        "Upload Agency Call Types CSV", 
-        type=["csv"], 
-        key="agency_csv"
-    )
-    if ag_file:
-        agency_df = pd.read_csv(ag_file)
-    else:
-        agency_df = None
-else:
-    # manual table with checkboxes/Y/N entries
-    agency_df = st.sidebar.experimental_data_editor(
-        pd.DataFrame(columns=[
-            "Call Type",
-            "DFR Response (Y/N)",
-            "Clearable (Y/N)"
-        ]),
-        num_rows="dynamic",
-        use_container_width=True,
-        key="agency_editor"
-    )
-
-# validate that we got something
-if agency_df is None or agency_df.shape[0] == 0:
-    st.sidebar.error("Please upload or enter at least one Agency Call Type.")
+if not ag_file:
+    st.sidebar.error("Please upload your Agency Call Types CSV.")
     st.stop()
 
-# DEBUG: show what loaded
+agency_df = pd.read_csv(ag_file)
+# normalize & preview
+agency_df["Call Type"]          = agency_df["Call Type"].astype(str).str.strip().str.upper()
+agency_df["DFR Response (Y/N)"] = agency_df["DFR Response (Y/N)"].astype(str).str.strip().str.upper()
+agency_df["Clearable (Y/N)"]    = agency_df["Clearable (Y/N)"].astype(str).str.strip().str.upper()
+
 st.sidebar.subheader("Agency Call Types Preview")
-st.sidebar.dataframe(agency_df)
+st.sidebar.dataframe(agency_df.head())
 
 progress.progress(50)
+
 
 agency_df["Call Type"]          = agency_df["Call Type"].astype(str).str.strip().str.upper()
 agency_df["DFR Response (Y/N)"] = agency_df["DFR Response (Y/N)"].astype(str).str.strip().str.upper()
