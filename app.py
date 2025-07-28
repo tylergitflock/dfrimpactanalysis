@@ -131,8 +131,19 @@ if "Address" in launch_df.columns and not {"Lat","Lon"}.issubset(launch_df.colum
         loc = geocode(addr)
         return (loc.latitude, loc.longitude) if loc else (None, None)
 
-    launch_df[["Lat","Lon"]] = launch_df["Address"]\
-        .apply(lambda a: pd.Series(lookup(a)))
+# Build a list of (lat, lon) tuples—skipping blank addresses
+coords = launch_df["Address"].fillna("").apply(
+    lambda a: lookup(a) if str(a).strip() else (None, None)
+)
+# Turn that into a DataFrame with identical index
+coords_df = pd.DataFrame(
+    coords.tolist(),
+    columns=["Lat","Lon"],
+    index=launch_df.index
+)
+# Assign back into launch_df
+launch_df[["Lat","Lon"]] = coords_df
+
 
 # 2e) Final validation
 if not {"Lat","Lon"}.issubset(launch_df.columns):
