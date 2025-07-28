@@ -349,6 +349,16 @@ with c3:
 progress.progress(100)
 
 # ─── 6) MAPS & HEATMAPS ──────────────────────────────────────────────────────
+try:
+    launch_coords = launch_df[["Lat","Lon"]].astype(float).values
+except Exception:
+    st.sidebar.error("Couldn't parse ‘Lat’ and ‘Lon’ from Launch Locations — please ensure those columns exist and contain numeric values.")
+    st.stop()
+
+if launch_coords is None or len(launch_coords) == 0:
+    st.warning("Please enter valid launch locations to view maps.")
+    st.stop()
+
 st.header("Maps & Heatmaps")
 
 def render_map(
