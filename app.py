@@ -82,37 +82,63 @@ if not raw_file:
 raw_df = pd.read_csv(raw_file)
 progress.progress(10)
 
+# ─── 2) Launch Locations ────────────────────────────────────────────────────
 st.sidebar.header("2) Launch Locations")
-launch_file = st.sidebar.file_uploader("Upload Launch Locations CSV", type=["csv"])
+
+# 2a) Choose manual vs CSV
+mode = st.sidebar.radio(
+    "How would you like to enter launch locations?",
+    ("By Coordinates", "By Address")
+)
+
+# 2b) Or upload a CSV instead
+launch_file = st.sidebar.file_uploader(
+    "Or upload Launch Locations CSV", 
+    type=["csv"], 
+    key="launch_csv"
+)
 if launch_file:
     launch_df = pd.read_csv(launch_file)
 else:
+    # 2c) Manual-entry table
     if _EDITOR is None:
-        st.sidebar.error("Upgrade Streamlit or upload Launch CSV.")
+        st.sidebar.error("Upgrade Streamlit or upload a CSV.")
         st.stop()
-    st.sidebar.write("Or enter manually:")
-    launch_df = _EDITOR(pd.DataFrame(columns=["Location Name","Lat","Lon"]),
-                        num_rows="dynamic", use_container_width=True)
-from geopy.geocoders import Nominatim
-from geopy.extra.rate_limiter import RateLimiter
 
-# If they provided addresses instead of lat/lon, fill in Lat & Lon:
+    if mode == "By Coordinates":
+        launch_df = _EDITOR(
+            pd.DataFrame(columns=["Location Name","Lat","Lon"]),
+            num_rows="dynamic", 
+            use_container_width=True
+        )
+    else:  # By Address
+        launch_df = _EDITOR(
+            pd.DataFrame(columns=["Location Name","Address"]),
+            num_rows="dynamic", 
+            use_container_width=True
+        )
+
+# 2d) If they entered Addresses, geocode into Lat/Lon
 if "Address" in launch_df.columns and not {"Lat","Lon"}.issubset(launch_df.columns):
+    from geopy.geocoders import Nominatim
+    from geopy.extra.rate_limiter import RateLimiter
+
     geolocator = Nominatim(user_agent="dfrimpact")
-    geocode = RateLimiter(geolocator.geocode, min_delay_seconds=1)
+    geocode    = RateLimiter(geolocator.geocode, min_delay_seconds=1)
 
     @st.cache_data(show_spinner=False)
     def lookup(addr):
         loc = geocode(addr)
         return (loc.latitude, loc.longitude) if loc else (None, None)
 
-    launch_df[["Lat","Lon"]] = launch_df["Address"].apply(
-        lambda a: pd.Series(lookup(a))
-    )
+    launch_df[["Lat","Lon"]] = launch_df["Address"]\
+        .apply(lambda a: pd.Series(lookup(a)))
 
-if launch_df.shape[1] < 3:
-    st.sidebar.error("Launch Locations needs cols: Location Name, Lat, Lon.")
+# 2e) Final validation
+if not {"Lat","Lon"}.issubset(launch_df.columns):
+    st.sidebar.error("You must supply Lat & Lon (directly or via Address).")
     st.stop()
+
 progress.progress(30)
 
 st.sidebar.header("3) Agency Call Types")
