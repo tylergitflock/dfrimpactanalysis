@@ -357,16 +357,20 @@ def render_map(
     title="",
     key=None,
     heat_radius=15,
-    heat_blur=25
+    heat_blur=25,
+    show_circle=False,
+    launch_coords=None
 ):
-    
     st.subheader(title)
+
     if show_circle and launch_coords and len(launch_coords):
         center = [float(launch_coords[0][0]), float(launch_coords[0][1])]
     elif not df_pts.empty:
         center = [float(df_pts["lat"].mean()), float(df_pts["lon"].mean())]
     else:
-        center = [39.0,-98.5]
+        center = [0.0, 0.0]  # fallback
+
+    # You can paste the rest of your map rendering code below here
     m = folium.Map(location=center, zoom_start=10)
     # ── draw the 3.5 mi drone range circle + epicenter icon ────────────────
     for la, lo in launch_coords:
@@ -398,7 +402,9 @@ render_map(
     dfr_only,
     heat=False,
     title="All DFR Calls (Scatter)",
-    key="map_all_scatter"
+    key="map_all_scatter",
+    show_circle=True,
+    launch_coords=launch_coords
 )
 
 # 3.5‑mile circle only
@@ -406,7 +412,9 @@ render_map(
     pd.DataFrame(),
     heat=False,
     title="3.5‑mile Drone Range",
-    key="map_range_circle"
+    key="map_range_circle",
+    show_circle=True,
+    launch_coords=launch_coords
 )
 
 # In‑Range Heatmap + its own sliders
@@ -418,7 +426,9 @@ render_map(
     title="Heatmap: In‑Range Calls",
     key="map_in_heat",
     heat_radius=r1,
-    heat_blur=b1
+    heat_blur=b1,
+    show_circle=True,
+    launch_coords=launch_coords
 )
 
 # P1 In‑Range Heatmap + its own sliders
@@ -430,7 +440,9 @@ render_map(
     title="Heatmap: P1 In‑Range",
     key="map_p1_heat",
     heat_radius=r2,
-    heat_blur=b2
+    heat_blur=b2,
+    show_circle=True,
+    launch_coords=launch_coords
 )
 
 # ALPR Heatmap + its own sliders (if present)
@@ -447,7 +459,9 @@ if alpr_df is not None:
         title="Heatmap: ALPR Locations",
         key="map_alpr_heat",
         heat_radius=r3,
-        heat_blur=b3
+        heat_blur=b3,
+        show_circle=True,
+        launch_coords=launch_coords
     )
 
 # Clearable Heatmap + its own sliders
@@ -459,7 +473,9 @@ render_map(
     title="Heatmap: Clearable Calls",
     key="map_clearable_heat",
     heat_radius=r4,
-    heat_blur=b4
+    heat_blur=b4,
+    show_circle=True,
+    launch_coords=launch_coords
 )
 
 # Audio Heatmap + its own sliders (if present)
@@ -476,5 +492,7 @@ if audio_df is not None:
         title="Heatmap: Audio Locations",
         key="map_audio_heat",
         heat_radius=r5,
-        heat_blur=b5
+        heat_blur=b5,
+        show_circle=True,
+        launch_coords=launch_coords
     )
