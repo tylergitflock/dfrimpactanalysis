@@ -350,10 +350,16 @@ progress.progress(100)
 
 # ─── 6) MAPS & HEATMAPS ──────────────────────────────────────────────────────
 st.header("Maps & Heatmaps")
-heat_radius = st.sidebar.slider("Heatmap radius", 1, 50, 15)
-heat_blur   = st.sidebar.slider("Heatmap blur",   1, 50, 25)
 
-def render_map(df_pts, show_circle=False, heat=False, title="", key=None):
+def render_map(
+    df_pts,
+    heat=False,
+    title="",
+    key=None,
+    heat_radius=15,
+    heat_blur=25
+):
+    
     st.subheader(title)
     if show_circle and len(launch_coords):
         center = [float(launch_coords[0][0]), float(launch_coords[0][1])]
@@ -362,82 +368,113 @@ def render_map(df_pts, show_circle=False, heat=False, title="", key=None):
     else:
         center = [39.0,-98.5]
     m = folium.Map(location=center, zoom_start=10)
-    if show_circle:
-        for la,lo in launch_coords:
-            folium.Circle(location=(la,lo),
-                          radius=drone_range*1609.34,
-                          color="blue", fill=False).add_to(m)
+    # ── draw the 3.5 mi drone range circle + epicenter icon ────────────────
+    for la, lo in launch_coords:
+        folium.Circle(
+            location=(la, lo),
+            radius=drone_range * 1609.34,
+            color="blue",
+            fill=False
+        ).add_to(m)
+        folium.Marker(
+            location=(la, lo),
+            icon=folium.Icon(icon="info-sign")
+        ).add_to(m)
     if heat and not df_pts.empty:
-        heat_data = df_pts[["lat","lon"]].dropna().values.tolist()
-        HeatMap(heat_data, radius=heat_radius, blur=heat_blur).add_to(m)
+        HeatMap(
+            df_pts[["lat","lon"]].values.tolist(),
+            radius=heat_radius,
+            blur=heat_blur
+        ).add_to(m)
+
     else:
         for _,r in df_pts.iterrows():
             folium.CircleMarker(location=(r["lat"],r["lon"]),
                                 radius=3, color="red", fill=True, fill_opacity=0.6).add_to(m)
     st_folium(m, width=800, height=500, key=key)
 
+# Scatter of all DFR calls
 render_map(
     dfr_only,
-    show_circle=False,
     heat=False,
     title="All DFR Calls (Scatter)",
-    key="map_all_scatter",
+    key="map_all_scatter"
 )
 
+# 3.5‑mile circle only
 render_map(
     pd.DataFrame(),
-    show_circle=True,
     heat=False,
-    title="3.5-mile Drone Range",
-    key="map_range_circle",
+    title="3.5‑mile Drone Range",
+    key="map_range_circle"
 )
 
+# In‑Range Heatmap + its own sliders
+r1 = st.sidebar.slider("In‑Range Heat Radius", 1, 50, 15, key="r1")
+b1 = st.sidebar.slider("In‑Range Heat Blur",   1, 50, 25, key="b1")
 render_map(
     in_range,
-    show_circle=False,
     heat=True,
-    title="Heatmap: In-Range Calls",
+    title="Heatmap: In‑Range Calls",
     key="map_in_heat",
+    heat_radius=r1,
+    heat_blur=b1
 )
 
+# P1 In‑Range Heatmap + its own sliders
+r2 = st.sidebar.slider("P1 In‑Range Heat Radius", 1, 50, 15, key="r2")
+b2 = st.sidebar.slider("P1 In‑Range Heat Blur",   1, 50, 25, key="b2")
 render_map(
     in_range[in_range["priority"]=="1"],
-    show_circle=False,
     heat=True,
-    title="Heatmap: P1 In-Range",
+    title="Heatmap: P1 In‑Range",
     key="map_p1_heat",
+    heat_radius=r2,
+    heat_blur=b2
 )
 
+# ALPR Heatmap + its own sliders (if present)
 if alpr_df is not None:
     alpr_plot = pd.DataFrame({
-        "lat": pd.to_numeric(alpr_df.iloc[:,1], errors="coerce"),
-        "lon": pd.to_numeric(alpr_df.iloc[:,2], errors="coerce")
+        "lat": pd.to_numeric(alpr_df.iloc[:,1],errors="coerce"),
+        "lon": pd.to_numeric(alpr_df.iloc[:,2],errors="coerce")
     }).dropna()
+    r3 = st.sidebar.slider("ALPR Heat Radius", 1, 50, 15, key="r3")
+    b3 = st.sidebar.slider("ALPR Heat Blur",   1, 50, 25, key="b3")
     render_map(
         alpr_plot,
-        show_circle=False,
         heat=True,
         title="Heatmap: ALPR Locations",
         key="map_alpr_heat",
+        heat_radius=r3,
+        heat_blur=b3
     )
 
+# Clearable Heatmap + its own sliders
+r4 = st.sidebar.slider("Clearable Heat Radius", 1, 50, 15, key="r4")
+b4 = st.sidebar.slider("Clearable Heat Blur",   1, 50, 25, key="b4")
 render_map(
     clearable,
-    show_circle=False,
     heat=True,
     title="Heatmap: Clearable Calls",
     key="map_clearable_heat",
+    heat_radius=r4,
+    heat_blur=b4
 )
 
+# Audio Heatmap + its own sliders (if present)
 if audio_df is not None:
     audio_plot = pd.DataFrame({
-        "lat": pd.to_numeric(audio_df.iloc[:,2], errors="coerce"),
-        "lon": pd.to_numeric(audio_df.iloc[:,3], errors="coerce")
+        "lat": pd.to_numeric(audio_df.iloc[:,2],errors="coerce"),
+        "lon": pd.to_numeric(audio_df.iloc[:,3],errors="coerce")
     }).dropna()
+    r5 = st.sidebar.slider("Audio Heat Radius", 1, 50, 15, key="r5")
+    b5 = st.sidebar.slider("Audio Heat Blur",   1, 50, 25, key="b5")
     render_map(
         audio_plot,
-        show_circle=False,
         heat=True,
         title="Heatmap: Audio Locations",
         key="map_audio_heat",
+        heat_radius=r5,
+        heat_blur=b5
     )
