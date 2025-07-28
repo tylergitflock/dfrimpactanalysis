@@ -119,7 +119,7 @@ else:
         )
 
 # 2d) If they entered Addresses, geocode into Lat/Lon
-if "Address" in launch_df.columns and not {"Lat","Lon"}.issubset(launch_df.columns):
+if mode == "By Address" and "Address" in launch_df.columns:
     from geopy.geocoders import Nominatim
     from geopy.extra.rate_limiter import RateLimiter
 
