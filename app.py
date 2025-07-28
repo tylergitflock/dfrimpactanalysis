@@ -303,30 +303,43 @@ officers     = (time_saved/3600)/fte_hours if fte_hours>0 else np.nan
 roi          = officers * officer_cost if np.isfinite(officers) else np.nan
 
 rows = [
-    ("DFR Responses within Range",         in_count,       "int"),
-    ("DFR Responses to ALPR and Audio",    dfr_alpr_audio, "int"),
-    ("Expected Drone Response Time",       avg_drone,      "mmss"),
-    ("Expected First on Scene %",          first_on_pct,   "pct"),
-    ("Expected CFS Cleared",               exp_cleared,    "int"),
-    ("Officers Saved (FTE)",               officers,       "2dec"),
-    ("ROI from Calls Cleared",             roi,            "usd"),
-    ("Total CFS",                          total_cfs,      "int"),
-    ("Total Potential DFR Calls",          total_dfr,      "int"),
-    ("Avg Patrol Response Time (All)",     avg_patrol,     "mmss"),
-    ("Avg Scene Time (All)",               avg_scene,      "mmss"),
-    ("Expected Decrease vs Patrol %",      pct_dec,        "pct"),
-    ("Avg Patrol (In-Range)",              avg_in,         "mmss"),
-    ("P1 In-Range Count",                  p1_count,       "int"),
-    ("Avg Patrol (P1 In-Range)",           avg_p1_pat,     "mmss"),
-    ("Expected Drone P1 ETA",              avg_p1_drone,   "mmss"),
-    ("ALPR Sites In-Range",                alpr_sites,     "int"),
-    ("ALPR Hits In-Range",                 alpr_hits,      "int"),
-    ("ALPR ETA Weighted",                  alpr_eta,       "mmss"),
-    ("Audio Sites In-Range",               audio_sites,    "int"),
-    ("Audio Hits In-Range",                audio_hits,     "int"),
-    ("Audio ETA Weighted",                 audio_eta,      "mmss"),
-    ("Total Clearable In-Range",           clr_count,      "int"),
-    ("Avg Scene Time (Clearable)",         avg_clr,        "mmss"),
+    ("DFR Responses within Range",                          in_count,        "int"),
+    ("DFR Responses to ALPR and Audio within Range",        dfr_alpr_audio,  "int"),
+    ("Expected DFR Drone Response Times by Location",       avg_drone,       "mmss"),
+    ("Expected First on Scene %",                           first_on_pct,    "pct"),
+    ("Expected CFS Cleared",                                exp_cleared,     "int"),
+    ("Number of Officers - Force Multiplication",           officers,        "2dec"),
+    ("ROI from Potential Calls Cleared",                    roi,             "usd"),
+    ("Total CFS",                                           total_cfs,       "int"),
+    ("Total Potential DFR Calls",                           total_dfr,       "int"),
+    ("DFR Responses within Range",                          in_count,        "int"),  # repeated on purpose per original
+    ("DFR Responses to ALPR and Audio within Range",        dfr_alpr_audio,  "int"),
+    ("Total Potential DFR Calls",                           total_dfr,       "int"),  # repeated on purpose per original
+    ("Avg Disp + Patrol Response Time to DFR Calls",        avg_patrol,      "mmss"),
+    ("Avg Time on Scene ALL DFR Calls",                     avg_scene,       "mmss"),
+    ("Expected DFR Drone Response Times by Location",       avg_drone,       "mmss"),
+    ("Expected First on Scene %",                           first_on_pct,    "pct"),
+    ("Expected Decrease in Response Times",                 pct_dec,         "pct"),
+    ("Avg Disp + Patrol Response Time to In-Range Calls",   avg_in,          "mmss"),
+    ("Expected DFR Drone Response Times by Location",       avg_drone,       "mmss"),  # repeated again by original order
+    ("Total DFR Calls In Range that are priority 1",        p1_count,        "int"),
+    ("Avg Disp + Patrol Response Time to In-Range P1 Calls",avg_p1_pat,      "mmss"),
+    ("Expected DFR Drone Response Times to P1 Calls",       avg_p1_drone,    "mmss"),
+    ("Hotspot location number of DFR calls within range",   in_count,        "int"),   # assuming same as in_count
+    ("Avg Disp + Pat to hotspot within range",              avg_in,          "mmss"),
+    ("Avg Expected drone response time to hotspot",         avg_drone,       "mmss"),
+    ("Number of ALPR Locations within range",               alpr_sites,      "int"),
+    ("Number of Hits within range",                         alpr_hits,       "int"),
+    ("Expected response time to ALPR data",                 alpr_eta,        "mmss"),
+    ("Number of Audio Locations",                           audio_sites,     "int"),
+    ("Number of hits within range",                         audio_hits,      "int"),
+    ("Avg expected resp time within range Audio Hits",      audio_eta,       "mmss"),
+    ("Expected Clearable CFS Cleared",                      exp_cleared,     "int"),   # same as earlier, used again
+    ("Number of Officers - Force Multiplication",           officers,        "2dec"),  # same again per original
+    ("ROI from Potential Calls Cleared",                    roi,             "usd"),   # same again per original
+    ("Total clearable CFS within range",                    clr_count,       "int"),
+    ("Total time spent on Clearable CFS",                   clr_count * avg_clr, "hhmmss"),
+    ("Avg Time on Scene – Clearable Calls",                 avg_clr,         "mmss"),
 ]
 
 report_df = pd.DataFrame({
@@ -392,10 +405,14 @@ def render_map(
                 color="blue",
                 fill=False
             ).add_to(m)
-            folium.Marker(
-                location=(la, lo),
-                icon=folium.Icon(icon="info-sign")
-            ).add_to(m)
+            folium.map.Marker(
+    location=(la, lo),
+    icon=folium.DivIcon(
+        icon_size=(12, 12),
+        icon_anchor=(6, 6),
+        html='<div style="font-size:16px; color: black;">⬤</div>'
+    )
+).add_to(m)
 
     # Add heatmap or points
     if heat and not df_pts.empty:
