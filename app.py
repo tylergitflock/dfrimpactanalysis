@@ -206,7 +206,12 @@ lat = pd.to_numeric(raw_df[col_lat], errors="coerce")
 lon = pd.to_numeric(raw_df[col_lon], errors="coerce")
 progress.progress(85)
 
-launch_coords = launch_df.iloc[:,1:3].astype(float).values
+# build a proper Lat/Lon array by column name, after any geocoding has run
+try:
+    launch_coords = launch_df[["Lat","Lon"]].astype(float).values
+except Exception:
+    st.sidebar.error("Couldn't parse ‘Lat’ and ‘Lon’ from Launch Locations — please ensure those columns exist and contain numeric values.")
+    st.stop()
 dist_mi       = haversine_min(lat.values, lon.values, launch_coords)
 drone_eta_sec = dist_mi / max(drone_speed,1e-9) * 3600
 progress.progress(90)
