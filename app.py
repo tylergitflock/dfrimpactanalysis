@@ -20,11 +20,16 @@ else:
 EPOCH_1899 = np.datetime64("1899-12-30")
 
 def parse_time_series(s: pd.Series) -> pd.Series:
-    s_obj = s.astype("object")
-    num   = pd.to_numeric(s_obj, errors="coerce")
+    # 1) Turn everything into strings, strip out commas (thousands separators)
+    s_str = s.astype(str).str.replace(",", "")
+    # 2) Try numeric → Excel serial date
+    num   = pd.to_numeric(s_str, errors="coerce")
     dt    = pd.to_datetime(EPOCH_1899) + pd.to_timedelta(num * 86400, unit="s")
-    txt   = pd.to_datetime(s_obj.where(num.isna(), None), errors="coerce")
+    # 3) If numeric failed, fall back to parsing any actual datetime text
+    txt   = pd.to_datetime(s_str.where(num.isna(), None), errors="coerce")
+    # 4) Use dt when we got a number, otherwise use txt
     return dt.where(~num.isna(), txt)
+
 
 def haversine_min(lat_arr, lon_arr, launches):
     res = np.full(lat_arr.shape, np.inf)
