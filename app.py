@@ -118,8 +118,8 @@ else:
             use_container_width=True
         )
 
-# 2d) If they entered Addresses, geocode into Lat/Lon
-if mode == "By Address" and "Address" in launch_df.columns:
+# 2d) Only geocode when in “By Address” mode
+if mode == "By Address":
     from geopy.geocoders import Nominatim
     from geopy.extra.rate_limiter import RateLimiter
 
@@ -131,19 +131,16 @@ if mode == "By Address" and "Address" in launch_df.columns:
         loc = geocode(addr)
         return (loc.latitude, loc.longitude) if loc else (None, None)
 
-# Build a list of (lat, lon) tuples—skipping blank addresses
-coords = launch_df["Address"].fillna("").apply(
-    lambda a: lookup(a) if str(a).strip() else (None, None)
-)
-# Turn that into a DataFrame with identical index
-coords_df = pd.DataFrame(
-    coords.tolist(),
-    columns=["Lat","Lon"],
-    index=launch_df.index
-)
-# Assign back into launch_df
-launch_df[["Lat","Lon"]] = coords_df
-
+    # Build a list of (lat, lon) tuples—skip empty
+    coords = launch_df["Address"].fillna("").apply(
+        lambda a: lookup(a) if str(a).strip() else (None, None)
+    )
+    coords_df = pd.DataFrame(
+        coords.tolist(),
+        columns=["Lat","Lon"],
+        index=launch_df.index
+    )
+    launch_df[["Lat","Lon"]] = coords_df
 
 # 2e) Final validation
 if not {"Lat","Lon"}.issubset(launch_df.columns):
