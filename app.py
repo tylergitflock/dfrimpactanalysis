@@ -195,6 +195,19 @@ st.sidebar.dataframe(agency_df)
 
 progress.progress(50)
 
+agency_df["Call Type"]          = agency_df["Call Type"].astype(str).str.strip().str.upper()
+agency_df["DFR Response (Y/N)"] = agency_df["DFR Response (Y/N)"].astype(str).str.strip().str.upper()
+agency_df["Clearable (Y/N)"]    = agency_df["Clearable (Y/N)"].astype(str).str.strip().str.upper()
+
+# ─── DEBUG: list raw vs agency call types ─────────────────────────────────
+st.sidebar.subheader("➤ Raw Call Types Found")
+raw_types = raw_df["Call Type"].dropna().astype(str).str.strip().str.upper().unique()
+st.sidebar.write(raw_types)
+
+st.sidebar.subheader("➤ Agency Call Types Supplied")
+ag_types  = agency_df["Call Type"].dropna().astype(str).str.strip().str.upper().unique()
+st.sidebar.write(ag_types)
+
 
 st.sidebar.header("4) Assumptions")
 fte_hours    = st.sidebar.number_input("Full Time Work Year (hrs)", value=2080, step=1)
