@@ -146,6 +146,12 @@ st.sidebar.subheader("Geocoded Launch Locations")
 if "Address" in launch_df.columns:
     st.sidebar.subheader("Geocoded Launch Locations")
     st.sidebar.dataframe(launch_df[["Location Name", "Address", "Lat", "Lon"]])
+if "Lat" in launch_df.columns and "Address" in launch_df.columns:
+    missing = launch_df["Lat"].isna().sum()
+    total   = len(launch_df)
+    if missing:
+        st.sidebar.warning(f"{missing}/{total} addresses failed to geocode (Lat/Lon = NaN)")
+
 
 # 2e) Final validation
 if not {"Lat","Lon"}.issubset(launch_df.columns):
