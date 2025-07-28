@@ -141,6 +141,9 @@ if mode == "By Address":
         index=launch_df.index
     )
     launch_df[["Lat","Lon"]] = coords_df
+    # ─── Debug: show what we geocoded ─────────────────────────────────────────────
+st.sidebar.subheader("Geocoded Launch Locations")
+st.sidebar.dataframe(launch_df[["Location Name", "Address", "Lat", "Lon"]])
 
 # 2e) Final validation
 if not {"Lat","Lon"}.issubset(launch_df.columns):
