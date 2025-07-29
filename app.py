@@ -179,6 +179,10 @@ if mode == "By Address":
         index=launch_df.index
     )
     launch_df[["Lat","Lon"]] = coords_df
+
+    # ─── DEBUG: show exactly what got geocoded
+    st.sidebar.subheader("🔥 Geocode Results")
+    st.sidebar.dataframe(launch_df)
     # ─── Debug: show what we geocoded ─────────────────────────────────────────────
 st.sidebar.subheader("Geocoded Launch Locations")
 
