@@ -622,38 +622,64 @@ render_map(
     launch_coords=launch_coords
 )
 
-# ALPR Heatmap + its own sliders (if present)
+# ─── ALPR Heatmap + its own sliders (if present) ───────────────────────────
 if alpr_df is not None:
     alpr_pts = pd.DataFrame({
-        "lat": pd.to_numeric(alpr_df.iloc[:,1],errors="coerce"),
-        "lon": pd.to_numeric(alpr_df.iloc[:,2],errors="coerce")
+        "lat": pd.to_numeric(alpr_df.iloc[:,1], errors="coerce"),
+        "lon": pd.to_numeric(alpr_df.iloc[:,2], errors="coerce")
     }).dropna()
-    r4 = st.sidebar.slider("ALPR Heat Radius", 1, 50, value=r4, key="alpr_r")
-    b4 = st.sidebar.slider("ALPR Heat Blur",   1, 50, value=b4, key="alpr_b")
+
+    # default for ALPR as requested
+    default_r_al, default_b_al = 6, 4
+
+    r_al = st.sidebar.slider(
+        "ALPR Heat Radius", 1, 50,
+        value=default_r_al,
+        key="alpr_r"
+    )
+    b_al = st.sidebar.slider(
+        "ALPR Heat Blur", 1, 50,
+        value=default_b_al,
+        key="alpr_b"
+    )
+
     render_map(
         alpr_pts,
         heat=True,
-        heat_radius=r4,
-        heat_blur=b4,
+        heat_radius=r_al,
+        heat_blur=b_al,
         title="Heatmap: ALPR Locations",
         key="map_alpr",
         show_circle=True,
         launch_coords=launch_coords
     )
 
-# Audio Heatmap + its own sliders (if present)
+# ─── Audio Heatmap + its own sliders (if present) ─────────────────────────
 if audio_df is not None:
     audio_pts = pd.DataFrame({
-        "lat": pd.to_numeric(audio_df.iloc[:,2],errors="coerce"),
-        "lon": pd.to_numeric(audio_df.iloc[:,3],errors="coerce")
+        "lat": pd.to_numeric(audio_df.iloc[:,2], errors="coerce"),
+        "lon": pd.to_numeric(audio_df.iloc[:,3], errors="coerce")
     }).dropna()
-    r5 = st.sidebar.slider("Audio Heat Radius", 1, 50, value=r5, key="audio_r")
-    b5 = st.sidebar.slider("Audio Heat Blur",   1, 50, value=b5, key="audio_b")
+
+    # default for Audio as requested
+    default_r_au, default_b_au = 4, 4
+
+    r_au = st.sidebar.slider(
+        "Audio Heat Radius", 1, 50,
+        value=default_r_au,
+        key="audio_r"
+    )
+    b_au = st.sidebar.slider(
+        "Audio Heat Blur", 1, 50,
+        value=default_b_au,
+        key="audio_b"
+    )
+
     render_map(
         audio_pts,
         heat=True,
-        heat_radius=r5,
-        heat_blur=b5,
+        heat_radius=r_au,
+        heat_blur=b_au,
         title="Heatmap: Audio Locations",
         key="map_audio",
         show_circle=True,
