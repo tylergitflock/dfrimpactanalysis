@@ -123,74 +123,75 @@ st.sidebar.download_button(
 # ─── 2) Launch Locations ────────────────────────────────────────────────────
 st.sidebar.header("2) Launch Locations")
 
-# 2a) Choose manual vs CSV
-mode = st.sidebar.radio(
-    "How would you like to enter launch locations?",
-    ("By Coordinates", "By Address")
-)
-
-# 2b) Or upload a CSV instead
+# 2a) Upload a CSV or edit in place:
 launch_file = st.sidebar.file_uploader(
-    "Or upload Launch Locations CSV", 
-    type=["csv"], 
+    "Upload Launch Locations CSV (with any of: Name, Address, Lat, Lon)",
+    type=["csv"],
     key="launch_csv"
 )
 if launch_file:
     launch_df = pd.read_csv(launch_file)
 else:
-    # 2c) Manual-entry table
     if _EDITOR is None:
-        st.sidebar.error("Upgrade Streamlit or upload a CSV.")
+        st.sidebar.error("Upgrade Streamlit or upload a CSV with launch locations.")
         st.stop()
+    launch_df = _EDITOR(
+        pd.DataFrame(columns=["Location Name","Address","Lat","Lon"]),
+        num_rows="dynamic",
+        use_container_width=True,
+        key="launch_editor"
+    )
 
-    if mode == "By Coordinates":
-        launch_df = _EDITOR(
-            pd.DataFrame(columns=["Location Name","Lat","Lon"]),
-            num_rows="dynamic", 
-            use_container_width=True
-        )
-    else:  # By Address
-        launch_df = _EDITOR(
-            pd.DataFrame(columns=["Location Name","Address"]),
-            num_rows="dynamic", 
-            use_container_width=True
-        )
+# 2b) Normalize column names and ensure all four exist
+launch_df.columns = [c.strip() for c in launch_df.columns]
+for col in ["Location Name","Address","Lat","Lon"]:
+    if col not in launch_df:
+        launch_df[col] = ""
 
-# 2d) Only geocode when in “By Address” mode
-if mode == "By Address":
-    from geopy.geocoders import Nominatim
-    from geopy.extra.rate_limiter import RateLimiter
+# 2c) Geocode any rows with Address but missing Lat/Lon
+from geopy.geocoders import Nominatim
+from geopy.extra.rate_limiter import RateLimiter
 
-    geolocator = Nominatim(user_agent="dfrimpact")
-    geocode    = RateLimiter(geolocator.geocode, min_delay_seconds=1)
+geolocator = Nominatim(user_agent="dfrimpact")
+geocode    = RateLimiter(geolocator.geocode, min_delay_seconds=1)
 
-    @st.cache_data(show_spinner=False)
-    def lookup(addr):
+@st.cache_data(show_spinner=False)
+def lookup(addr):
+    try:
         loc = geocode(addr)
         return (loc.latitude, loc.longitude) if loc else (None, None)
+    except:
+        return (None, None)
 
-    # Build a list of (lat, lon) tuples—skip empty
-    coords = launch_df["Address"].fillna("").apply(
-        lambda a: lookup(a) if str(a).strip() else (None, None)
-    )
-    coords_df = pd.DataFrame(
-        coords.tolist(),
-        columns=["Lat","Lon"],
-        index=launch_df.index
-    )
-    launch_df[["Lat","Lon"]] = coords_df
+to_geocode = launch_df["Address"].notna() & (
+    pd.to_numeric(launch_df["Lat"], errors="coerce").isna() |
+    pd.to_numeric(launch_df["Lon"], errors="coerce").isna()
+)
+for idx in launch_df.loc[to_geocode].index:
+    lat, lon = lookup(launch_df.at[idx, "Address"])
+    launch_df.at[idx, "Lat"]  = lat
+    launch_df.at[idx, "Lon"]  = lon
 
-    # ─── DEBUG: show exactly what got geocoded
-    st.sidebar.subheader("🔥 Geocode Results")
-    st.sidebar.dataframe(launch_df)
-    # ─── Debug: show what we geocoded ─────────────────────────────────────────────
 st.sidebar.subheader("Geocoded Launch Locations")
+st.sidebar.dataframe(launch_df)
 
-
-# 2e) Final validation
-if not {"Lat","Lon"}.issubset(launch_df.columns):
-    st.sidebar.error("You must supply Lat & Lon (directly or via Address).")
+# 2d) Final validation: every row must now have numeric Lat & Lon
+valid_coords = (
+    pd.to_numeric(launch_df["Lat"], errors="coerce").notna() &
+    pd.to_numeric(launch_df["Lon"], errors="coerce").notna()
+)
+if not valid_coords.all():
+    bad = launch_df.loc[~valid_coords, ["Location Name","Address","Lat","Lon"]]
+    st.sidebar.error(
+        "Some rows still lack valid Lat/Lon:\n" +
+        bad.to_csv(index=False)
+    )
     st.stop()
+
+# 2e) Convert and store launch_coords for downstream use
+launch_df["Lat"] = pd.to_numeric(launch_df["Lat"], errors="coerce")
+launch_df["Lon"] = pd.to_numeric(launch_df["Lon"], errors="coerce")
+launch_coords   = list(launch_df[["Lat","Lon"]].itertuples(index=False, name=None))
 
 progress.progress(30)
 
