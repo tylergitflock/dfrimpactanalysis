@@ -553,8 +553,8 @@ def render_map(
     st_folium(m, width=800, height=500, key=key)
 
 # Scatter of all DFR calls
-r1 = st.sidebar.slider("In‑Range Heat Radius", 1, 50, 15, key="r1")
-b1 = st.sidebar.slider("In‑Range Heat Blur",   1, 50, 25, key="b1")
+r1 = st.sidebar.slider("All DFR Calls Heat Radius", 1, 50, 15, key="r1")
+b1 = st.sidebar.slider("All DFR Calls Heat Blur",   1, 50, 25, key="b1")
 render_map(
     dfr_only,
     heat=True,
