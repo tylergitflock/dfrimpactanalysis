@@ -287,41 +287,41 @@ col_dispatch = pick(
   "Time First Dispatch"
 )
 
-for c in [col_create,col_arrive,col_close,col_type,col_pri,col_lat,col_lon]:
+for c in [col_create, col_dispatch, col_arrive, col_close, col_type, col_pri, col_lat, col_lon]:
     if c is None:
         st.error("Missing required Raw Call Data columns.")
         st.stop()
 
-# ─── parse timestamps ────────────────────────────────────────────────────────
 create_dt   = parse_time_series(raw_df[col_create])
 dispatch_dt = parse_time_series(raw_df[col_dispatch])
 arrive_dt   = parse_time_series(raw_df[col_arrive])
 close_dt    = parse_time_series(raw_df[col_close])
 
-# ─── validity mask: drop self-initiated & negative intervals ────────────────
+# — compute raw response seconds
+response_sec = (arrive_dt - create_dt).dt.total_seconds()
+
+# — validity mask: drop self-initiated, negatives, tiny times, NaTs
 valid = (
-     (dispatch_dt > create_dt)
-  &  (arrive_dt   > dispatch_dt)
-  &  (arrive_dt   > create_dt)
+     (dispatch_dt  > create_dt)         # real dispatch
+  &  (arrive_dt    > dispatch_dt)       # real arrival
+  &  (arrive_dt    > create_dt)         # no weird negatives
+  &  (response_sec > 5)                 # ignore <= 5s “glitches”
   &  dispatch_dt.notna()
   &  arrive_dt.notna()
   &  create_dt.notna()
 )
 
-# ─── filter everything down to valid rows ────────────────────────────────────
+# — filter down your DataFrame & all series
 raw_df      = raw_df.loc[valid].copy()
 create_dt   = create_dt[valid]
 dispatch_dt = dispatch_dt[valid]
 arrive_dt   = arrive_dt[valid]
 close_dt    = close_dt[valid]
 
-# ─── re-compute lat/lon after filtering ───────────────────────────────────────
+patrol_sec  = (arrive_dt - create_dt).dt.total_seconds()
+onscene_sec = (close_dt  - arrive_dt).dt.total_seconds()
 lat = pd.to_numeric(raw_df[col_lat], errors="coerce")
 lon = pd.to_numeric(raw_df[col_lon], errors="coerce")
-
-# ─── now compute your intervals correctly ────────────────────────────────────
-patrol_sec   = (dispatch_dt - create_dt).dt.total_seconds()    # create → dispatch
-onscene_sec  = (arrive_dt   - dispatch_dt).dt.total_seconds()  # dispatch → arrive
 
 progress.progress(85)
 
