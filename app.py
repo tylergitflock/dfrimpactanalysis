@@ -622,34 +622,38 @@ render_map(
     launch_coords=launch_coords
 )
 
-# 6e) ALPR Heatmap (fixed radius & blur)
+# ALPR Heatmap + its own sliders (if present)
 if alpr_df is not None:
     alpr_pts = pd.DataFrame({
-        "lat": pd.to_numeric(alpr_df.iloc[:,1], errors="coerce"),
-        "lon": pd.to_numeric(alpr_df.iloc[:,2], errors="coerce")
+        "lat": pd.to_numeric(alpr_df.iloc[:,1],errors="coerce"),
+        "lon": pd.to_numeric(alpr_df.iloc[:,2],errors="coerce")
     }).dropna()
+    r4 = st.sidebar.slider("ALPR Heat Radius", 1, 50, value=r4, key="alpr_r")
+    b4 = st.sidebar.slider("ALPR Heat Blur",   1, 50, value=b4, key="alpr_b")
     render_map(
         alpr_pts,
         heat=True,
-        heat_radius=6,
-        heat_blur=4,
+        heat_radius=r4,
+        heat_blur=b4,
         title="Heatmap: ALPR Locations",
         key="map_alpr",
         show_circle=True,
         launch_coords=launch_coords
     )
 
-# 6f) Audio Heatmap (fixed radius & blur)
+# Audio Heatmap + its own sliders (if present)
 if audio_df is not None:
     audio_pts = pd.DataFrame({
-        "lat": pd.to_numeric(audio_df.iloc[:,2], errors="coerce"),
-        "lon": pd.to_numeric(audio_df.iloc[:,3], errors="coerce")
+        "lat": pd.to_numeric(audio_df.iloc[:,2],errors="coerce"),
+        "lon": pd.to_numeric(audio_df.iloc[:,3],errors="coerce")
     }).dropna()
+    r5 = st.sidebar.slider("Audio Heat Radius", 1, 50, value=r5, key="audio_r")
+    b5 = st.sidebar.slider("Audio Heat Blur",   1, 50, value=b5, key="audio_b")
     render_map(
         audio_pts,
         heat=True,
-        heat_radius=4,
-        heat_blur=4,
+        heat_radius=r5,
+        heat_blur=b5,
         title="Heatmap: Audio Locations",
         key="map_audio",
         show_circle=True,
