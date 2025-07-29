@@ -309,14 +309,20 @@ progress.progress(85)
 # build a proper Lat/Lon array by column name, after any geocoding has run
 try:
     raw_coords = launch_df[["Lat","Lon"]].astype(float).values
-    # DROP any bad coords so Folium never sees a NaN:
+
+    # ─── DROP any bad coordinates so Folium never sees a NaN
     launch_coords = [
         (lat, lon)
         for lat, lon in raw_coords
         if np.isfinite(lat) and np.isfinite(lon)
     ]
+
+    if not launch_coords:
+        st.sidebar.error("No valid launch locations available to draw the drone-range circle.")
+        st.stop()
+
 except Exception:
-    st.sidebar.error("Couldn't parse ‘Lat’ and ‘Lon’ …")
+    st.sidebar.error("Couldn't parse ‘Lat’ and ‘Lon’ from Launch Locations — please ensure those columns exist and contain numeric values.")
     st.stop()
 
 dist_mi       = haversine_min(lat.values, lon.values, launch_coords)
