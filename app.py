@@ -258,6 +258,12 @@ col_type   = pick("Call Type")
 col_pri    = pick("Call Priority")
 col_lat    = pick("Lat")
 col_lon    = pick("Lon")
+col_dispatch = pick(
+  "First Dispatch",
+  "Time First Unit Assigned",
+  "First Unit Assigned",
+  "Time First Dispatch"
+)
 
 for c in [col_create,col_arrive,col_close,col_type,col_pri,col_lat,col_lon]:
     if c is None:
