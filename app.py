@@ -553,10 +553,12 @@ def render_map(
     st_folium(m, width=800, height=500, key=key)
 
 # Scatter of all DFR calls
+r1 = st.sidebar.slider("In‑Range Heat Radius", 1, 50, 15, key="r1")
+b1 = st.sidebar.slider("In‑Range Heat Blur",   1, 50, 25, key="b1")
 render_map(
     dfr_only,
     heat=True,
-    title="All DFR Calls (Scatter)",
+    title="All DFR Calls",
     key="map_all_scatter",
     show_circle=True,
     launch_coords=launch_coords
@@ -573,8 +575,8 @@ render_map(
 )
 
 # In‑Range Heatmap + its own sliders
-r1 = st.sidebar.slider("In‑Range Heat Radius", 1, 50, 15, key="r1")
-b1 = st.sidebar.slider("In‑Range Heat Blur",   1, 50, 25, key="b1")
+r2 = st.sidebar.slider("In‑Range Heat Radius", 1, 50, 15, key="r2")
+b2 = st.sidebar.slider("In‑Range Heat Blur",   1, 50, 25, key="b2")
 render_map(
     in_range,
     heat=True,
@@ -587,8 +589,8 @@ render_map(
 )
 
 # P1 In‑Range Heatmap + its own sliders
-r2 = st.sidebar.slider("P1 In‑Range Heat Radius", 1, 50, 15, key="r2")
-b2 = st.sidebar.slider("P1 In‑Range Heat Blur",   1, 50, 25, key="b2")
+r3 = st.sidebar.slider("P1 In‑Range Heat Radius", 1, 50, 15, key="r3")
+b3 = st.sidebar.slider("P1 In‑Range Heat Blur",   1, 50, 25, key="b3")
 render_map(
     in_range[in_range["priority"]=="1"],
     heat=True,
@@ -606,8 +608,8 @@ if alpr_df is not None:
         "lat": pd.to_numeric(alpr_df.iloc[:,1],errors="coerce"),
         "lon": pd.to_numeric(alpr_df.iloc[:,2],errors="coerce")
     }).dropna()
-    r3 = st.sidebar.slider("ALPR Heat Radius", 1, 50, 15, key="r3")
-    b3 = st.sidebar.slider("ALPR Heat Blur",   1, 50, 25, key="b3")
+    r4 = st.sidebar.slider("ALPR Heat Radius", 1, 50, 15, key="r4")
+    b4 = st.sidebar.slider("ALPR Heat Blur",   1, 50, 25, key="b4")
     render_map(
         alpr_plot,
         heat=True,
@@ -620,8 +622,8 @@ if alpr_df is not None:
     )
 
 # Clearable Heatmap + its own sliders
-r4 = st.sidebar.slider("Clearable Heat Radius", 1, 50, 15, key="r4")
-b4 = st.sidebar.slider("Clearable Heat Blur",   1, 50, 25, key="b4")
+r5 = st.sidebar.slider("Clearable Heat Radius", 1, 50, 15, key="r5")
+b5 = st.sidebar.slider("Clearable Heat Blur",   1, 50, 25, key="b5")
 render_map(
     clearable,
     heat=True,
@@ -639,8 +641,8 @@ if audio_df is not None:
         "lat": pd.to_numeric(audio_df.iloc[:,2],errors="coerce"),
         "lon": pd.to_numeric(audio_df.iloc[:,3],errors="coerce")
     }).dropna()
-    r5 = st.sidebar.slider("Audio Heat Radius", 1, 50, 15, key="r5")
-    b5 = st.sidebar.slider("Audio Heat Blur",   1, 50, 25, key="b5")
+    r6 = st.sidebar.slider("Audio Heat Radius", 1, 50, 15, key="r6")
+    b6 = st.sidebar.slider("Audio Heat Blur",   1, 50, 25, key="b6")
     render_map(
         audio_plot,
         heat=True,
