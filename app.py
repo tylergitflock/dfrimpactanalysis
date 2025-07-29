@@ -552,7 +552,7 @@ def render_map(
 
     st_folium(m, width=800, height=500, key=key)
 
-# Scatter of all DFR calls
+# All DFR Calls Heatmap + sliders
 r1 = st.sidebar.slider("All DFR Calls Heat Radius", 1, 50, 15, key="r1")
 b1 = st.sidebar.slider("All DFR Calls Heat Blur",   1, 50, 25, key="b1")
 render_map(
@@ -560,44 +560,46 @@ render_map(
     heat=True,
     title="All DFR Calls",
     key="map_all_scatter",
-    show_circle=True,
-    launch_coords=launch_coords
-)
-
-# 3.5‑mile circle only
-render_map(
-    pd.DataFrame(),
-    heat=False,
-    title="3.5‑mile Drone Range",
-    key="map_range_circle",
-    show_circle=True,
-    launch_coords=launch_coords
-)
-
-# In‑Range Heatmap + its own sliders
-r2 = st.sidebar.slider("In‑Range Heat Radius", 1, 50, 15, key="r2")
-b2 = st.sidebar.slider("In‑Range Heat Blur",   1, 50, 25, key="b2")
-render_map(
-    in_range,
-    heat=True,
-    title="Heatmap: In‑Range Calls",
-    key="map_in_heat",
     heat_radius=r1,
     heat_blur=b1,
     show_circle=True,
     launch_coords=launch_coords
 )
 
-# P1 In‑Range Heatmap + its own sliders
-r3 = st.sidebar.slider("P1 In‑Range Heat Radius", 1, 50, 15, key="r3")
-b3 = st.sidebar.slider("P1 In‑Range Heat Blur",   1, 50, 25, key="b3")
+# 3.5-mile circle only
+render_map(
+    pd.DataFrame(),
+    heat=False,
+    title="3.5-mile Drone Range",
+    key="map_range_circle",
+    show_circle=True,
+    launch_coords=launch_coords
+)
+
+# In-Range Heatmap + its own sliders
+r2 = st.sidebar.slider("In-Range Heat Radius", 1, 50, 15, key="r2")
+b2 = st.sidebar.slider("In-Range Heat Blur",   1, 50, 25, key="b2")
+render_map(
+    in_range,
+    heat=True,
+    title="Heatmap: In-Range Calls",
+    key="map_in_heat",
+    heat_radius=r2,
+    heat_blur=b2,
+    show_circle=True,
+    launch_coords=launch_coords
+)
+
+# P1 In-Range Heatmap + its own sliders
+r3 = st.sidebar.slider("P1 In-Range Heat Radius", 1, 50, 15, key="r3")
+b3 = st.sidebar.slider("P1 In-Range Heat Blur",   1, 50, 25, key="b3")
 render_map(
     in_range[in_range["priority"]=="1"],
     heat=True,
-    title="Heatmap: P1 In‑Range",
+    title="Heatmap: P1 In-Range",
     key="map_p1_heat",
-    heat_radius=r2,
-    heat_blur=b2,
+    heat_radius=r3,
+    heat_blur=b3,
     show_circle=True,
     launch_coords=launch_coords
 )
@@ -615,8 +617,8 @@ if alpr_df is not None:
         heat=True,
         title="Heatmap: ALPR Locations",
         key="map_alpr_heat",
-        heat_radius=r3,
-        heat_blur=b3,
+        heat_radius=r4,
+        heat_blur=b4,
         show_circle=True,
         launch_coords=launch_coords
     )
@@ -629,8 +631,8 @@ render_map(
     heat=True,
     title="Heatmap: Clearable Calls",
     key="map_clearable_heat",
-    heat_radius=r4,
-    heat_blur=b4,
+    heat_radius=r5,
+    heat_blur=b5,
     show_circle=True,
     launch_coords=launch_coords
 )
@@ -648,8 +650,8 @@ if audio_df is not None:
         heat=True,
         title="Heatmap: Audio Locations",
         key="map_audio_heat",
-        heat_radius=r5,
-        heat_blur=b5,
+        heat_radius=r6,
+        heat_blur=b6,
         show_circle=True,
         launch_coords=launch_coords
     )
