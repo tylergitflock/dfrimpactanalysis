@@ -516,7 +516,8 @@ def render_map(
     st.subheader(title)
 
     # ─── DROP any rows lacking valid lat/lon so Folium never sees NaNs
-    df_pts = df_pts.dropna(subset=["lat","lon"])
+    if {"lat","lon"}.issubset(df_pts.columns):
+         df_pts = df_pts.dropna(subset=["lat","lon"])
     
     if show_circle and launch_coords is not None and len(launch_coords):
         center = [float(launch_coords[0][0]), float(launch_coords[0][1])]
