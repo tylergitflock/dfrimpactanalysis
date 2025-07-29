@@ -94,6 +94,29 @@ raw_df["Call Type"] = (
 )
 progress.progress(10)
 
+# ─── EXTRA STEP: BUILD & OFFER A “Call Types” TEMPLATE ────────────────────────
+raw_types = (
+    raw_df["Call Type"]
+      .dropna()
+      .unique()
+)
+raw_types.sort()
+
+template = pd.DataFrame({
+    "Call Type":           raw_types,
+    "DFR Response (Y/N)":  ["" for _ in raw_types],
+    "Clearable (Y/N)":     ["" for _ in raw_types]
+})
+
+csv_bytes = template.to_csv(index=False).encode("utf-8")
+st.sidebar.download_button(
+    "📥 Download Call-Types Template",
+    data=csv_bytes,
+    file_name="call_types_template.csv",
+    mime="text/csv",
+    help="Fill in Y/N for each row, then re-upload under “Agency Call Types.”"
+)
+
 # ─── 2) Launch Locations ────────────────────────────────────────────────────
 st.sidebar.header("2) Launch Locations")
 
