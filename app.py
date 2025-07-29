@@ -94,6 +94,9 @@ raw_df["Call Type"] = (
 )
 progress.progress(10)
 
+# 📌 keep the total number of CAD events before any filtering
+raw_count = len(raw_df)
+
 # ─── EXTRA STEP: BUILD & OFFER A “Call Types” TEMPLATE ────────────────────────
 raw_types = (
     raw_df["Call Type"]
@@ -400,7 +403,7 @@ if audio_df is not None and audio_df.shape[1]>=5:
 dfr_alpr_audio = alpr_hits + audio_hits
 
 # ─── 4) METRICS & REPORT ─────────────────────────────────────────────────────
-total_cfs   = len(df_all)
+total_cfs   = raw_count
 total_dfr   = len(dfr_only)
 in_count    = len(in_range)
 clr_count   = len(clearable)
