@@ -276,10 +276,17 @@ progress.progress(85)
 
 # build a proper Lat/Lon array by column name, after any geocoding has run
 try:
-    launch_coords = launch_df[["Lat","Lon"]].astype(float).values
+    raw_coords = launch_df[["Lat","Lon"]].astype(float).values
+    # DROP any bad coords so Folium never sees a NaN:
+    launch_coords = [
+        (lat, lon)
+        for lat, lon in raw_coords
+        if np.isfinite(lat) and np.isfinite(lon)
+    ]
 except Exception:
-    st.sidebar.error("Couldn't parse ‘Lat’ and ‘Lon’ from Launch Locations — please ensure those columns exist and contain numeric values.")
+    st.sidebar.error("Couldn't parse ‘Lat’ and ‘Lon’ …")
     st.stop()
+
 dist_mi       = haversine_min(lat.values, lon.values, launch_coords)
 drone_eta_sec = dist_mi / max(drone_speed,1e-9) * 3600
 progress.progress(90)
