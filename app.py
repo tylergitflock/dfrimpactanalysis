@@ -647,38 +647,30 @@ render_map(
 
 # 6d) Hotspot Area + All DFR Calls heatmap (0.5 mi radius)
 if hotspot_coords:
-    # compute default auto‐heat params over all DFR calls
+    # default auto‐heat params over all DFR calls
     r_hs_default, b_hs_default = auto_heat_params(all_dfr)
 
     # sliders just for hotspot
     r_hs = st.sidebar.slider(
-        "Hotspot Heat Radius", 
-        min_value=1, 
-        max_value=50, 
-        value=r_hs_default, 
-        key="hotspot_r"
+        "Hotspot Heat Radius", 1, 50, value=r_hs_default, key="hotspot_r"
     )
     b_hs = st.sidebar.slider(
-        "Hotspot Heat Blur", 
-        min_value=1, 
-        max_value=50, 
-        value=b_hs_default, 
-        key="hotspot_b"
+        "Hotspot Heat Blur",   1, 50, value=b_hs_default, key="hotspot_b"
     )
 
     render_map(
-        all_dfr,                   # plot all DFR calls as heat
+        all_dfr,                    # heat over all DFR calls
         heat=True,
         heat_radius=r_hs,
         heat_blur=b_hs,
         title="Heatmap: All DFR Calls Around Hotspot",
         key="map_hotspot_heat",
-        show_circle=False,         # we’ll draw only the hotspot circle
-        launch_coords=None,        # no drone‐range circle here
+        show_circle=True,            # <— draw the 3.5 mi drone‐range circle
+        launch_coords=launch_coords, # <— supply your drone‐range coords
         hotspot_center=hotspot_coords[0],
-        hotspot_radius=0.5
+        hotspot_radius=0.5           # <— draw the 0.5 mi red ring
     )
-
+    
 # 6e) Hotspot Area (.5 mi radius)
 if hotspot_coords:
     render_map(
