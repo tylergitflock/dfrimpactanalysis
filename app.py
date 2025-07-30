@@ -529,7 +529,6 @@ with c3:
 progress.progress(100)
 
 # ─── 6) MAPS & HEATMAPS ──────────────────────────────────────────────────────
-
 st.header("Maps & Heatmaps")
 
 def render_map(
@@ -546,11 +545,11 @@ def render_map(
 ):
     st.subheader(title)
 
-    # drop any bad points
+    # drop any NaNs so folium never errors
     if {"lat","lon"}.issubset(df_pts.columns):
         df_pts = df_pts.dropna(subset=["lat","lon"])
 
-    # choose map center
+    # determine map center
     if show_circle and launch_coords:
         center = [float(launch_coords[0][0]), float(launch_coords[0][1])]
     elif not df_pts.empty:
@@ -560,7 +559,7 @@ def render_map(
 
     m = folium.Map(location=center, zoom_start=10)
 
-    # draw 3.5-mile drone-range circles
+    # blue 3.5 mi drone-range circle
     if show_circle and launch_coords:
         for la, lo in launch_coords:
             folium.Circle(
@@ -570,7 +569,7 @@ def render_map(
                 fill=False
             ).add_to(m)
 
-    # draw hotspot circle
+    # red 0.5 mi hotspot circle
     if hotspot_center and hotspot_radius:
         folium.Circle(
             location=hotspot_center,
@@ -580,7 +579,7 @@ def render_map(
             fill=False
         ).add_to(m)
 
-    # add heat or markers
+    # heat or points
     if heat and not df_pts.empty:
         HeatMap(
             df_pts[["lat","lon"]].values.tolist(),
@@ -599,13 +598,23 @@ def render_map(
 
     st_folium(m, width=800, height=500, key=key)
 
-# prepare DataFrames
-all_dfr       = dfr_only.copy()
-in_range_df   = dfr_only[dfr_only["dist_mi"].le(drone_range)].copy()
-all_p1        = all_dfr[all_dfr["priority"]=="1"].copy()
-all_clearable = all_dfr[all_dfr["call_type_up"].isin(clr_map)].copy()
 
-# 6a) All DFR Calls heatmap
+# prepare full-city subsets
+all_dfr       = dfr_only.copy()
+all_p1        = all_dfr[all_dfr["priority"]=="1"]
+all_clearable = all_dfr[all_dfr["call_type_up"].isin(clr_map)]
+
+# compute hotspot subset (0.5 mi) if provided
+if hotspot_coords:
+    hs_lat = all_dfr["lat"].values
+    hs_lon = all_dfr["lon"].values
+    hs_dist = haversine_min(hs_lat, hs_lon, hotspot_coords)
+    hotspot_calls = all_dfr[hs_dist <= 0.5].copy()
+else:
+    hotspot_calls = pd.DataFrame()
+
+
+# 6a) Heatmap: All DFR Calls
 r0, b0 = auto_heat_params(all_dfr)
 r_all = st.sidebar.slider("All DFR Calls Heat Radius", 1, 50, value=r0, key="all_r")
 b_all = st.sidebar.slider("All DFR Calls Heat Blur",   1, 50, value=b0, key="all_b")
@@ -620,7 +629,7 @@ render_map(
     launch_coords=launch_coords
 )
 
-# 6b) 3.5-mile Drone Range circle
+# 6b) 3.5-mile Drone-Range Circle Only
 render_map(
     pd.DataFrame(),
     heat=False,
@@ -630,64 +639,43 @@ render_map(
     launch_coords=launch_coords
 )
 
-# 6c) DFR Within Range heatmap
-r1, b1 = auto_heat_params(in_range_df)
-r_in = st.sidebar.slider("In-Range Heat Radius", 1, 50, value=r1, key="in_r")
-b_in = st.sidebar.slider("In-Range Heat Blur",   1, 50, value=b1, key="in_b")
+# 6c) Heatmap: All P1 DFR Calls
+r1, b1 = auto_heat_params(all_p1)
+r_p1 = st.sidebar.slider("P1 DFR Heat Radius", 1, 50, value=r1, key="p1_r")
+b_p1 = st.sidebar.slider("P1 DFR Heat Blur",   1, 50, value=b1, key="p1_b")
 render_map(
-    in_range_df,
+    all_p1,
     heat=True,
-    heat_radius=r_in,
-    heat_blur=b_in,
-    title="Heatmap: DFR Calls Within Range",
-    key="map_in_heat",
+    heat_radius=r_p1,
+    heat_blur=b_p1,
+    title="Heatmap: All P1 DFR Calls",
+    key="map_p1_heat",
     show_circle=True,
     launch_coords=launch_coords
 )
 
-# 6d) Hotspot Area + All DFR Calls heatmap (0.5 mi radius)
+# 6d) Heatmap: DFR Calls in Hotspot Area (0.5 mi)
 if hotspot_coords:
-    # default auto‐heat params over all DFR calls
-    r_hs_default, b_hs_default = auto_heat_params(all_dfr)
-
-    # sliders just for hotspot
-    r_hs = st.sidebar.slider(
-        "Hotspot Heat Radius", 1, 50, value=r_hs_default, key="hotspot_r"
-    )
-    b_hs = st.sidebar.slider(
-        "Hotspot Heat Blur",   1, 50, value=b_hs_default, key="hotspot_b"
-    )
-
+    r_hs, b_hs = auto_heat_params(hotspot_calls)
+    r_hs = st.sidebar.slider("Hotspot Heat Radius", 1, 50, value=r_hs, key="hs_r")
+    b_hs = st.sidebar.slider("Hotspot Heat Blur",   1, 50, value=b_hs, key="hs_b")
     render_map(
-        all_dfr,                    # heat over all DFR calls
+        hotspot_calls,
         heat=True,
         heat_radius=r_hs,
         heat_blur=b_hs,
-        title="Heatmap: All DFR Calls Around Hotspot",
+        title="Heatmap: DFR Calls in Hotspot Area",
         key="map_hotspot_heat",
-        show_circle=True,            # <— draw the 3.5 mi drone‐range circle
-        launch_coords=launch_coords, # <— supply your drone‐range coords
-        hotspot_center=hotspot_coords[0],
-        hotspot_radius=0.5           # <— draw the 0.5 mi red ring
-    )
-    
-# 6e) Hotspot Area (.5 mi radius)
-if hotspot_coords:
-    render_map(
-        pd.DataFrame(),
-        heat=False,
-        title="Hotspot Area (0.5 mi)",
-        key="map_hotspot",
         show_circle=True,
         launch_coords=launch_coords,
         hotspot_center=hotspot_coords[0],
         hotspot_radius=0.5
     )
 
-# 6f) All Clearable DFR Calls heatmap
-r3, b3 = auto_heat_params(all_clearable)
-r_cl = st.sidebar.slider("Clearable Heat Radius", 1, 50, value=r3, key="clr_r")
-b_cl = st.sidebar.slider("Clearable Heat Blur",   1, 50, value=b3, key="clr_b")
+# 6e) Heatmap: All Clearable DFR Calls
+r2, b2 = auto_heat_params(all_clearable)
+r_cl = st.sidebar.slider("Clearable Heat Radius", 1, 50, value=r2, key="clr_r")
+b_cl = st.sidebar.slider("Clearable Heat Blur",   1, 50, value=b2, key="clr_b")
 render_map(
     all_clearable,
     heat=True,
@@ -699,11 +687,11 @@ render_map(
     launch_coords=launch_coords
 )
 
-# 6g) ALPR heatmap (fixed 6/4)
+# 6f) Heatmap: ALPR Locations (fixed 6/4)
 if alpr_df is not None:
     alpr_pts = pd.DataFrame({
-        "lat": pd.to_numeric(alpr_df.iloc[:,1], errors="coerce"),
-        "lon": pd.to_numeric(alpr_df.iloc[:,2], errors="coerce")
+        "lat": pd.to_numeric(alpr_df.iloc[:,1],errors="coerce"),
+        "lon": pd.to_numeric(alpr_df.iloc[:,2],errors="coerce")
     }).dropna()
     r_al = st.sidebar.slider("ALPR Heat Radius", 1, 50, value=6, key="alpr_r")
     b_al = st.sidebar.slider("ALPR Heat Blur",   1, 50, value=4, key="alpr_b")
@@ -718,11 +706,11 @@ if alpr_df is not None:
         launch_coords=launch_coords
     )
 
-# 6h) Audio heatmap (fixed 4/4)
+# 6g) Heatmap: Audio Locations (fixed 4/4)
 if audio_df is not None:
     audio_pts = pd.DataFrame({
-        "lat": pd.to_numeric(audio_df.iloc[:,2], errors="coerce"),
-        "lon": pd.to_numeric(audio_df.iloc[:,3], errors="coerce")
+        "lat": pd.to_numeric(audio_df.iloc[:,2],errors="coerce"),
+        "lon": pd.to_numeric(audio_df.iloc[:,3],errors="coerce")
     }).dropna()
     r_au = st.sidebar.slider("Audio Heat Radius", 1, 50, value=4, key="audio_r")
     b_au = st.sidebar.slider("Audio Heat Blur",   1, 50, value=4, key="audio_b")
