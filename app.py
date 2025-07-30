@@ -654,23 +654,22 @@ render_map(
     launch_coords=launch_coords
 )
 
-# 6d) Heatmap: DFR Calls in Hotspot Area (0.5 mi)
-if hotspot_coords:
-    r_hs, b_hs = auto_heat_params(hotspot_calls)
-    r_hs = st.sidebar.slider("Hotspot Heat Radius", 1, 50, value=r_hs, key="hs_r")
-    b_hs = st.sidebar.slider("Hotspot Heat Blur",   1, 50, value=b_hs, key="hs_b")
-    render_map(
-        hotspot_calls,
-        heat=True,
-        heat_radius=r_hs,
-        heat_blur=b_hs,
-        title="Heatmap: DFR Calls in Hotspot Area",
-        key="map_hotspot_heat",
-        show_circle=True,
-        launch_coords=launch_coords,
-        hotspot_center=hotspot_coords[0],
-        hotspot_radius=0.5
-    )
+# 6d) Heatmap: All DFR Calls + Hotspot Overlay
+r_hs, b_hs = auto_heat_params(all_dfr)
+r_hs = st.sidebar.slider("Hotspot Heat Radius",  1, 50, value=r_hs, key="hs_r")
+b_hs = st.sidebar.slider("Hotspot Heat Blur",    1, 50, value=b_hs, key="hs_b")
+render_map(
+    all_dfr,                             # <-- same as “All DFR Calls”
+    heat=True,
+    heat_radius=r_hs,
+    heat_blur=b_hs,
+    title="Heatmap: All DFR Calls + Hotspot",
+    key="map_hotspot_heat",
+    show_circle=True,                    # draws the blue 3.5 mi circle
+    launch_coords=launch_coords,
+    hotspot_center=hotspot_coords[0],    # red hotspot center
+    hotspot_radius=0.5                   # 0.5 mi radius
+)
 
 # 6e) Heatmap: All Clearable DFR Calls
 r2, b2 = auto_heat_params(all_clearable)
