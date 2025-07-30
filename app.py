@@ -540,9 +540,9 @@ def render_map(
     heat_radius=15,
     heat_blur=25,
     show_circle=False,
-    launch_coords=None
+    launch_coords=None,
     hotspot_center=None,   # ← new
-    hotspot_radius=None    # ← new (miles)
+    hotspot_radius=None,    # ← new (miles)
 ):
     st.subheader(title)
 
