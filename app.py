@@ -592,7 +592,7 @@ if alpr_df is not None:
         "lat": pd.to_numeric(alpr_df.iloc[:,1], errors="coerce"),
         "lon": pd.to_numeric(alpr_df.iloc[:,2], errors="coerce")
     }).dropna()
-    r4_default, b4_default = 6, 4
+    r4_default, b4_default = 12, 4
     r4 = st.sidebar.slider("ALPR Heat Radius", 1, 50, value=r4_default, key="alpr_r")
     b4 = st.sidebar.slider("ALPR Heat Blur",   1, 50, value=b4_default, key="alpr_b")
     render_map(
