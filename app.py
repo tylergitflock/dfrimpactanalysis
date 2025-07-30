@@ -387,6 +387,29 @@ if audio_df is not None and audio_df.shape[1]>=5:
 
 dfr_alpr_audio = alpr_hits + audio_hits
 
+# ─── NEW: Total unfiltered ALPR + Audio hits ───────────────────────────────
+total_alpr_hits  = 0
+total_audio_hits = 0
+
+if alpr_df is not None:
+    last_col = alpr_df.columns[-1]
+    total_alpr_hits = (
+        pd.to_numeric(alpr_df[last_col], errors="coerce")
+          .fillna(0)
+          .sum()
+    )
+
+if audio_df is not None:
+    # hits are always in the 5th column (index 4)
+    total_audio_hits = (
+        pd.to_numeric(audio_df.iloc[:,4], errors="coerce")
+          .fillna(0)
+          .sum()
+    )
+
+total_alpr_audio = int(total_alpr_hits + total_audio_hits)
+# ─────────────────────────────────────────────────────────────────────────────
+
 # ─── 4) METRICS & REPORT ─────────────────────────────────────────────────────
 total_cfs   = raw_count
 total_dfr   = len(dfr_only)
@@ -410,6 +433,8 @@ officers     = (time_saved/3600)/fte_hours if fte_hours>0 else np.nan
 roi          = officers * officer_cost if np.isfinite(officers) else np.nan
 
 rows = [
+    ("Total CFS",                                           total_cfs,       "int"),
+    ("Total ALPR + Audio Hits ",                            total_alpr_audio,"int"),
     ("DFR Responses within Range",                          in_count,        "int"),
     ("DFR Responses to ALPR and Audio within Range",        dfr_alpr_audio,  "int"),
     ("Expected DFR Drone Response Times by Location",       avg_drone,       "mmss"),
