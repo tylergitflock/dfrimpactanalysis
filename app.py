@@ -556,112 +556,101 @@ zoom_pad = st.sidebar.slider(
     "Map Zoom Padding (px)", min_value=0, max_value=200, value=30, step=5
 )
 
-# 6a) All DFR Calls
-r0, b0 = auto_heat_params(dfr_only)
-r1 = st.sidebar.slider("All DFR Calls Heat Radius", 1, 50, value=r0, key="all_r")
-b1 = st.sidebar.slider("All DFR Calls Heat Blur",   1, 50, value=b0, key="all_b")
+# Build the three “full city” DataFrames:
+all_dfr       = dfr_only.copy()
+all_p1        = all_dfr[all_dfr["priority"] == "1"]
+all_clearable = all_dfr[all_dfr["call_type_up"].isin(clr_map)]
+
+# 6a) Heatmap of ALL DFR calls (ignores range)
+r0, b0 = auto_heat_params(all_dfr)
+r_all = st.sidebar.slider("All DFR Calls Heat Radius", 1, 50, value=r0, key="all_r")
+b_all = st.sidebar.slider("All DFR Calls Heat Blur",   1, 50, value=b0, key="all_b")
 render_map(
-    dfr_only,
+    all_dfr,
     heat=True,
-    heat_radius=r1,
-    heat_blur=b1,
-    title="All DFR Calls",
-    key="map_all",
+    heat_radius=r_all,
+    heat_blur=b_all,
+    title="Heatmap: All DFR Calls",
+    key="map_all_heat",
     show_circle=True,
     launch_coords=launch_coords
 )
 
-# 6b) 3.5-mile circle (no heat)
+# 6b) 3.5-mile drone-range circle only
 render_map(
     pd.DataFrame(),
     heat=False,
     title="3.5-mile Drone Range",
-    key="map_range",
+    key="map_range_circle",
     show_circle=True,
     launch_coords=launch_coords
 )
 
-# 6c) In-Range Heatmap
-r2, b2 = auto_heat_params(in_range)
-r_in = st.sidebar.slider("In-Range Heat Radius", 1, 50, value=r2, key="in_r")
-b_in = st.sidebar.slider("In-Range Heat Blur",   1, 50, value=b2, key="in_b")
+# 6c) Heatmap of ALL P1 DFR calls (ignores range)
+r1, b1 = auto_heat_params(all_p1)
+r_p1 = st.sidebar.slider("P1 DFR Heat Radius", 1, 50, value=r1, key="p1_r")
+b_p1 = st.sidebar.slider("P1 DFR Heat Blur",   1, 50, value=b1, key="p1_b")
 render_map(
-    in_range,
-    heat=True,
-    heat_radius=r_in,
-    heat_blur=b_in,
-    title="Heatmap: In-Range Calls",
-    key="map_in",
-    show_circle=True,
-    launch_coords=launch_coords
-)
-
-# 6d) P1 In-Range Heatmap
-r3, b3 = auto_heat_params(in_range[in_range["priority"]=="1"])
-r_p1 = st.sidebar.slider("P1 In-Range Heat Radius", 1, 50, value=r3, key="p1_r")
-b_p1 = st.sidebar.slider("P1 In-Range Heat Blur",   1, 50, value=b3, key="p1_b")
-render_map(
-    in_range[in_range["priority"]=="1"],
+    all_p1,
     heat=True,
     heat_radius=r_p1,
     heat_blur=b_p1,
-    title="Heatmap: P1 In-Range",
-    key="map_p1",
+    title="Heatmap: All P1 DFR Calls",
+    key="map_p1_heat",
     show_circle=True,
     launch_coords=launch_coords
 )
 
-# 6e) ALPR Heatmap (fixed 6/4, plus slider)
-if alpr_df is not None:
-    alpr_pts = pd.DataFrame({
-        "lat": pd.to_numeric(alpr_df.iloc[:,1], errors="coerce"),
-        "lon": pd.to_numeric(alpr_df.iloc[:,2], errors="coerce")
-    }).dropna()
-    r4_default, b4_default = 12, 4
-    r4 = st.sidebar.slider("ALPR Heat Radius", 1, 50, value=r4_default, key="alpr_r")
-    b4 = st.sidebar.slider("ALPR Heat Blur",   1, 50, value=b4_default, key="alpr_b")
-    render_map(
-        alpr_pts,
-        heat=True,
-        heat_radius=r4,
-        heat_blur=b4,
-        title="Heatmap: ALPR Locations",
-        key="map_alpr",
-        show_circle=True,
-        launch_coords=launch_coords
-    )
-
-# 6f) Audio Heatmap (fixed 4/4, plus slider)
-if audio_df is not None:
-    audio_pts = pd.DataFrame({
-        "lat": pd.to_numeric(audio_df.iloc[:,2], errors="coerce"),
-        "lon": pd.to_numeric(audio_df.iloc[:,3], errors="coerce")
-    }).dropna()
-    r5_default, b5_default = 4, 4
-    r5 = st.sidebar.slider("Audio Heat Radius", 1, 50, value=r5_default, key="audio_r")
-    b5 = st.sidebar.slider("Audio Heat Blur",   1, 50, value=b5_default, key="audio_b")
-    render_map(
-        audio_pts,
-        heat=True,
-        heat_radius=r5,
-        heat_blur=b5,
-        title="Heatmap: Audio Locations",
-        key="map_audio",
-        show_circle=True,
-        launch_coords=launch_coords
-    )
-
-# 6g) Clearable Heatmap
-r6, b6 = auto_heat_params(clearable)
-r_cl = st.sidebar.slider("Clearable Heat Radius", 1, 50, value=r6, key="clr_r")
-b_cl = st.sidebar.slider("Clearable Heat Blur",   1, 50, value=b6, key="clr_b")
+# 6d) Heatmap of ALL clearable DFR calls (ignores range)
+r2, b2 = auto_heat_params(all_clearable)
+r_cl = st.sidebar.slider("Clearable Heat Radius", 1, 50, value=r2, key="clr_r")
+b_cl = st.sidebar.slider("Clearable Heat Blur",   1, 50, value=b2, key="clr_b")
 render_map(
-    clearable,
+    all_clearable,
     heat=True,
     heat_radius=r_cl,
     heat_blur=b_cl,
-    title="Heatmap: Clearable Calls",
-    key="map_clearable",
+    title="Heatmap: All Clearable DFR Calls",
+    key="map_clearable_heat",
     show_circle=True,
     launch_coords=launch_coords
 )
+
+# 6e) ALPR Heatmap (if provided) — unchanged
+if alpr_df is not None:
+    alpr_pts = pd.DataFrame({
+        "lat": pd.to_numeric(alpr_df.iloc[:,1],errors="coerce"),
+        "lon": pd.to_numeric(alpr_df.iloc[:,2],errors="coerce")
+    }).dropna()
+    r3, b3 = auto_heat_params(alpr_pts)
+    r_al = st.sidebar.slider("ALPR Heat Radius", 1, 50, value=6, key="alpr_r")   # fixed 6
+    b_al = st.sidebar.slider("ALPR Heat Blur",   1, 50, value=4, key="alpr_b")   # fixed 4
+    render_map(
+        alpr_pts,
+        heat=True,
+        heat_radius=r_al,
+        heat_blur=b_al,
+        title="Heatmap: ALPR Locations",
+        key="map_alpr_heat",
+        show_circle=True,
+        launch_coords=launch_coords
+    )
+
+# 6f) Audio Heatmap (if provided) — unchanged
+if audio_df is not None:
+    audio_pts = pd.DataFrame({
+        "lat": pd.to_numeric(audio_df.iloc[:,2],errors="coerce"),
+        "lon": pd.to_numeric(audio_df.iloc[:,3],errors="coerce")
+    }).dropna()
+    r4 = st.sidebar.slider("Audio Heat Radius", 1, 50, value=4, key="audio_r")    # fixed 4
+    b4 = st.sidebar.slider("Audio Heat Blur",   1, 50, value=4, key="audio_b")    # fixed 4
+    render_map(
+        audio_pts,
+        heat=True,
+        heat_radius=r4,
+        heat_blur=b4,
+        title="Heatmap: Audio Locations",
+        key="map_audio_heat",
+        show_circle=True,
+        launch_coords=launch_coords
+    )
