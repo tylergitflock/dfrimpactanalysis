@@ -250,50 +250,27 @@ progress.progress(80)
 
 # ─── 6) Hotspot Area ──────────────────────────────────────────
 st.sidebar.header("6) Hotspot Area")
-
-# 1) Address input
 hotspot_address = st.sidebar.text_input(
     "Enter Hotspot Address (0.5 mi radius)",
     help="e.g. “123 Main St, Anytown, USA”"
 )
 
-# 2) Manual fallback fields (hidden if geocode succeeds)
-hotspot_lat_manual = st.sidebar.number_input(
-    "Manual Latitude (if geocoding fails)", format="%.6f"
-)
-hotspot_lon_manual = st.sidebar.number_input(
-    "Manual Longitude (if geocoding fails)", format="%.6f"
-)
-
-# always start empty
 hotspot_coords: list[tuple[float,float]] = []
-
 if hotspot_address:
-    # try geocoding
-    coords = lookup(hotspot_address)  # returns (lat, lon) or (None, None)
-    valid_geo = (
-        coords is not None
-        and isinstance(coords[0], (int,float)) and np.isfinite(coords[0])
-        and isinstance(coords[1], (int,float)) and np.isfinite(coords[1])
-    )
+    try:
+        coords = lookup(hotspot_address)  # may return (lat, lon) or (None,None)
+        lat_hs, lon_hs = coords if coords is not None else (None, None)
 
-    if valid_geo:
-        # success: use the geocoded point
-        hotspot_coords = [coords]
-    else:
-        # geocoding failed: fall back to manual if provided
+        # only accept real, finite numbers
         if (
-            isinstance(hotspot_lat_manual, float)
-            and isinstance(hotspot_lon_manual, float)
-            and np.isfinite(hotspot_lat_manual)
-            and np.isfinite(hotspot_lon_manual)
+            isinstance(lat_hs, (int, float)) and np.isfinite(lat_hs)
+            and isinstance(lon_hs, (int, float)) and np.isfinite(lon_hs)
         ):
-            hotspot_coords = [(hotspot_lat_manual, hotspot_lon_manual)]
+            hotspot_coords = [(lat_hs, lon_hs)]
         else:
-            st.sidebar.error(
-                "Could not geocode that address. "
-                "Please refine the address or enter lat/lon manually."
-            )
+            st.sidebar.warning("⚠️ Couldn’t geocode that address; skipping hotspot overlay.")
+    except Exception as e:
+        st.sidebar.warning(f"⚠️ Geocoding error, skipping hotspot: {e}")
 
 # ─── 2) PARSE & COMPUTE ───────────────────────────────────────────────────────
 col_map = {c.lower():c for c in raw_df.columns}
