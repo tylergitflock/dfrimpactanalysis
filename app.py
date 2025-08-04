@@ -453,6 +453,11 @@ alpr_df  = pd.read_csv(alpr_file)  if alpr_file  else None
 if alpr_df is not None:
     st.sidebar.write(f"Total rows in ALPR file: {alpr_df.shape[0]}")
 audio_df = pd.read_csv(audio_file) if audio_file else None
+import pandas as pd
+
+chunks = pd.read_csv(alpr_file, chunksize=1_000_000)
+alpr_df = pd.concat(chunks, ignore_index=True)
+st.sidebar.write("Total rows after concat:", alpr_df.shape[0])
 
 
 # initialize metrics
