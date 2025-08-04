@@ -248,37 +248,12 @@ alpr_file  = st.sidebar.file_uploader("Upload ALPR Data CSV", type=["csv"])
 audio_file = st.sidebar.file_uploader("Upload Audio Hits CSV", type=["csv"])
 progress.progress(80)
 
-# ─── 6) Hotspot Area ──────────────────────────────────────────
-st.sidebar.header("6) Hotspot Area")
+# ─── 6) Hotspot Point ───────────────────────────────────────────
+st.sidebar.header("6) Hotspot Coordinates (manual entry)")
+hotspot_lat = st.sidebar.number_input("Hotspot Latitude", format="%.6f")
+hotspot_lon = st.sidebar.number_input("Hotspot Longitude", format="%.6f")
+hotspot_coords = [(hotspot_lat, hotspot_lon)] if (hotspot_lat and hotspot_lon) else []
 
-hotspot_address = st.sidebar.text_input(
-    "Enter Hotspot Address (0.5 mi radius)",
-    help="e.g. “123 Main St, Anytown, USA”"
-)
-
-# always start with an empty list
-hotspot_coords: list[tuple[float,float]] = []
-
-if hotspot_address:
-    coords = lookup(hotspot_address)
-
-    # 1) Did geopy even return anything?
-    if coords is None:
-        st.sidebar.error("Unable to geocode that address.")
-    else:
-        # 2) Unpack lat/lon
-        lat_hs, lon_hs = coords
-
-        # 3) Check each one for None or non-finite
-        if (lat_hs is None
-            or lon_hs is None
-            or not (isinstance(lat_hs, (int, float)) and np.isfinite(lat_hs))
-            or not (isinstance(lon_hs, (int, float)) and np.isfinite(lon_hs))
-        ):
-            st.sidebar.error("Unable to geocode that address.")
-        else:
-            # 4) All good!
-            hotspot_coords = [(lat_hs, lon_hs)]
 # ─── 2) PARSE & COMPUTE ───────────────────────────────────────────────────────
 col_map = {c.lower():c for c in raw_df.columns}
 def pick(*alts):
