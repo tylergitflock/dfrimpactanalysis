@@ -261,11 +261,11 @@ hotspot_coords: list[tuple[float,float]] = []
 
 if hotspot_address:
     coords = lookup(hotspot_address)
-    if coords is None or not all(np.isfinite(coords)):
+    # use np.all instead of built-in all()
+    if coords is None or not np.all(np.isfinite(coords)):
         st.sidebar.error("Unable to geocode that address.")
     else:
-        # now we have exactly one valid entry in the list
-        hotspot_coords = [coords]     
+        hotspot_coords = [coords]
 
 # ─── 2) PARSE & COMPUTE ───────────────────────────────────────────────────────
 col_map = {c.lower():c for c in raw_df.columns}
