@@ -451,6 +451,9 @@ progress.progress(95)
 # ─── 3) OPTIONAL ALPR & AUDIO METRICS (new ALPR format) ────────────────────
 alpr_df  = pd.read_csv(alpr_file)  if alpr_file  else None
 if alpr_df is not None:
+    st.sidebar.write("ALPR columns:", alpr_df.columns.tolist())
+    st.sidebar.write("ALPR sample rows:", alpr_df.head(3))
+if alpr_df is not None:
     st.sidebar.write(f"ALPR rows loaded: {alpr_df.shape[0]}")
     st.sidebar.write("ALPR first 3 rows:", alpr_df.head(3))
     st.sidebar.write("ALPR last 3 rows:", alpr_df.tail(3))
