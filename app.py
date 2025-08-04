@@ -450,7 +450,6 @@ if hotspot_coords:
 progress.progress(95)
 # ─── 3) OPTIONAL ALPR & AUDIO METRICS (new ALPR format) ────────────────────
 alpr_df  = pd.read_csv(alpr_file)  if alpr_file  else None
-audio_df = pd.read_csv(audio_file) if audio_file else None
 if alpr_df is not None:
     st.sidebar.write(f"Total rows in ALPR file: {alpr_df.shape[0]}")
 audio_df = pd.read_csv(audio_file) if audio_file else None
