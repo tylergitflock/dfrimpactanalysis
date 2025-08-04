@@ -761,16 +761,14 @@ if alpr_df is not None:
         launch_coords=launch_coords
     )
 
-# 6g) Heatmap: Audio Locations (fixed 4/4)
-if audio_df is not None:
-    audio_pts = pd.DataFrame({
-        "lat": pd.to_numeric(audio_df.iloc[:,2],errors="coerce"),
-        "lon": pd.to_numeric(audio_df.iloc[:,3],errors="coerce")
-    }).dropna()
+# 6g) Heatmap: Audio Locations (using the cleaned audio_pts from above)
+if audio_pts is not None and not audio_pts.empty:
+    # allow the user to tweak radius/blur
     r_au = st.sidebar.slider("Audio Heat Radius", 1, 50, value=4, key="audio_r")
     b_au = st.sidebar.slider("Audio Heat Blur",   1, 50, value=4, key="audio_b")
+
     render_map(
-        audio_pts,
+        audio_pts,                     # your DataFrame with 'lat' & 'lon'
         heat=True,
         heat_radius=r_au,
         heat_blur=b_au,
@@ -779,3 +777,5 @@ if audio_df is not None:
         show_circle=True,
         launch_coords=launch_coords
     )
+else:
+    st.sidebar.info("No audio points to display on the heatmap.")
