@@ -248,7 +248,7 @@ alpr_file  = st.sidebar.file_uploader("Upload ALPR Data CSV", type=["csv"])
 audio_file = st.sidebar.file_uploader("Upload Audio Hits CSV", type=["csv"])
 progress.progress(80)
 
-# ─── 6) Hotspot Area (insert here) ──────────────────────────────────────────
+# ─── 6) Hotspot Area ──────────────────────────────────────────
 st.sidebar.header("6) Hotspot Area")
 
 hotspot_address = st.sidebar.text_input(
@@ -256,13 +256,16 @@ hotspot_address = st.sidebar.text_input(
     help="e.g. “123 Main St, Anytown, USA”"
 )
 
-hotspot_coords = []
+# always start with an empty list
+hotspot_coords: list[tuple[float,float]] = []
+
 if hotspot_address:
-    coords = lookup(hotspot_address)    # your existing geocode function
+    coords = lookup(hotspot_address)
     if coords is None or not all(np.isfinite(coords)):
         st.sidebar.error("Unable to geocode that address.")
     else:
-        hotspot_coords.append(coords)     
+        # now we have exactly one valid entry in the list
+        hotspot_coords = [coords]     
 
 # ─── 2) PARSE & COMPUTE ───────────────────────────────────────────────────────
 col_map = {c.lower():c for c in raw_df.columns}
