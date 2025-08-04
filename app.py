@@ -463,8 +463,8 @@ if alpr_df is not None:
     # 1) hit counts (still in col 3)
     hits    = pd.to_numeric(alpr_df.iloc[:, 3], errors="coerce").fillna(0).values
     
-    # 2) reasons (still in col 8)
-    reasons = alpr_df.iloc[:, 8].astype(str).str.upper().str.strip().values
+    # 2) reasons (still in col 8), keep as a Series so .isin works
+    reasons = alpr_df.iloc[:, 8].astype(str).str.upper().str.strip()
     
     # 3) **correct** lat/lon from cols 1 & 2
     lat_a   = pd.to_numeric(alpr_df.iloc[:, 1], errors="coerce").values
