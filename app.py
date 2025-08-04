@@ -425,38 +425,47 @@ if alpr_df is not None:
     etas       = dist / max(drone_speed, 1e-9) * 3600
     alpr_eta   = float((etas[ok]*hits[ok]).sum() / hits[ok].sum()) if hits[ok].sum() > 0 else np.nan
 
-# --- Audio metrics: count unique locations + total hits, weighted ETA & heat data ───
+# --- Audio metrics: count unique sensors + total hits, weighted ETA & heat data ───
 audio_sites = audio_hits = audio_eta = 0
 audio_pts   = None
 
 if audio_df is not None:
-    # 1) ensure the hit‐coords columns exist
-    lat_b = pd.to_numeric(audio_df["Hit Latitude"], errors="coerce")
-    lon_b = pd.to_numeric(audio_df["Hit Longitude"], errors="coerce")
+    # 1) pick your sensor‐ID column (adjust the name to whatever your CSV uses)
+    sensor_col = "Sensor ID"  # e.g. "Audio Sensor Id", "SensorSerial", etc.
+    if sensor_col not in audio_df.columns:
+        st.error(f"Couldn’t find a '{sensor_col}' column in the audio data.")
+    else:
+        # 2) total unique sensors
+        audio_sites = int(audio_df[sensor_col].nunique())
 
-    # 2) drop invalid
-    valid = lat_b.notna() & lon_b.notna()
-    df_hits = pd.DataFrame({
-      "lat": lat_b[valid],
-      "lon": lon_b[valid]
-    })
+        # 3) total hits (each row is one hit, or use a count column if you have one)
+        if "Count of Audio Hit Id" in audio_df.columns:
+            audio_hits = int(audio_df["Count of Audio Hit Id"].sum())
+        else:
+            audio_hits = len(audio_df)
 
-    # 3) group by location
-    grp = df_hits.groupby(["lat","lon"]).size().reset_index(name="count")
+        # 4) if you still want ETA & heatmap by sensor location, pick one lat/lon per sensor:
+        #    here we’ll take the first hit’s coords for each sensor
+        df_sensor = (
+            audio_df
+              .dropna(subset=["Hit Latitude","Hit Longitude"])
+              .groupby(sensor_col)
+              .first()
+              .reset_index()
+        )
+        lat_b = pd.to_numeric(df_sensor["Hit Latitude"], errors="coerce")
+        lon_b = pd.to_numeric(df_sensor["Hit Longitude"], errors="coerce")
+        coords = list(zip(lat_b, lon_b))
+        dist2  = haversine_min(lat_b.values, lon_b.values, launch_coords)
+        etas2  = dist2 / max(drone_speed,1e-9) * 3600
+        audio_eta = float((etas2).sum() / len(etas2)) if len(etas2)>0 else np.nan
 
-    audio_sites = len(grp)                # unique locations
-    audio_hits  = int(grp["count"].sum()) # total rows/hits
-
-    # 4) compute distance & ETA per location
-    coords = list(zip(grp["lat"], grp["lon"]))
-    dist2  = haversine_min(grp["lat"].values, grp["lon"].values, launch_coords)
-    etas2  = dist2 / max(drone_speed,1e-9) * 3600
-
-    # 5) hits‐weighted average ETA
-    audio_eta = float((etas2 * grp["count"].values).sum() / audio_hits) if audio_hits>0 else np.nan
-
-    # 6) prepare for heatmap: use [lat, lon, intensity] tuples
-    audio_pts = grp.rename(columns={"lat":"lat","lon":"lon"})
+        # 5) prepare for heatmap using one point per sensor
+        audio_pts = pd.DataFrame({
+            "lat": lat_b,
+            "lon": lon_b,
+            "sensor": df_sensor[sensor_col]
+        })
 
 # combine for your overall “DFR + ALPR + Audio” metric
 dfr_alpr_audio = alpr_hits + audio_hits
