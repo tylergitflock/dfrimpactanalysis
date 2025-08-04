@@ -478,12 +478,25 @@ total_alpr_audio = int(total_alpr_hits + total_audio_hits)
 total_alpr_hits  = 0
 total_audio_hits = 0
 
+# ALPR: sum hits in column D (index 3)
 if alpr_df is not None:
-    last_col = alpr_df.columns[-1]
-    total_alpr_hits = pd.to_numeric(alpr_df[last_col], errors="coerce").fillna(0).sum()
+    total_alpr_hits = (
+        pd.to_numeric(alpr_df.iloc[:, 3], errors="coerce")
+          .fillna(0)
+          .sum()
+    )
 
+# Audio: sum the 'Count of Audio Hit Id' column if it exists, otherwise count rows
 if audio_df is not None:
-    total_audio_hits = pd.to_numeric(audio_df.iloc[:, 4], errors="coerce").fillna(0).sum()
+    if "Count of Audio Hit Id" in audio_df.columns:
+        total_audio_hits = (
+            pd.to_numeric(audio_df["Count of Audio Hit Id"], errors="coerce")
+              .fillna(0)
+              .sum()
+        )
+    else:
+        # no explicit count column, assume one hit per row
+        total_audio_hits = len(audio_df)
 
 total_alpr_audio = int(total_alpr_hits + total_audio_hits)
 
