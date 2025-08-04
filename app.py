@@ -364,13 +364,6 @@ df_all = pd.DataFrame({
 # normalize every column name to lowercase (and strip any stray spaces)
 df_all.columns = df_all.columns.str.lower().str.strip()
 
-# now downstream subsets will also have lowercase names:
-dfr_only  = df_all[df_all["call_type_up"].isin(dfr_map) & df_all["patrol_sec"].gt(0)].copy()
-in_range  = dfr_only[dfr_only["dist_mi"].le(drone_range)].copy()
-
-# … later, this will definitely work:
-p1_count    = int((in_range["priority"] == "1").sum())
-
 # ─── 2f) Drop any rows with missing or non-positive patrol response
 df_all = df_all[df_all["patrol_sec"] > 0].copy()
 
