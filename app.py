@@ -397,25 +397,6 @@ progress.progress(95)
 alpr_df  = pd.read_csv(alpr_file)  if alpr_file  else None
 audio_df = pd.read_csv(audio_file) if audio_file else None
 
-# ─── geocode Audio Hits by address if provided ────────────────────────────
-if audio_df is not None and "Address" in audio_df.columns:
-    coords_a = audio_df["Address"].fillna("").apply(
-        lambda a: lookup(a) if str(a).strip() else (None, None)
-    )
-    coords_df = pd.DataFrame(
-        coords_a.tolist(), columns=["Lat","Lon"], index=audio_df.index
-    )
-    audio_df[["Lat","Lon"]] = coords_df
-
-# ─── only convert / drop if we actually have Lat & Lon ──────────────────────
-if audio_df is not None and {"Lat","Lon"}.issubset(audio_df.columns):
-    audio_df["Lat"] = pd.to_numeric(audio_df["Lat"], errors="coerce")
-    audio_df["Lon"] = pd.to_numeric(audio_df["Lon"], errors="coerce")
-    audio_df = audio_df.dropna(subset=["Lat","Lon"])
-else:
-    # no valid audio coordinates → treat as if no audio data
-    audio_df = None
-
 # --- ALPR metrics (new columns: D=hits, I=reason, J=lat, K=lon) ---
 alpr_sites = alpr_hits = alpr_eta = 0
 if alpr_df is not None:
@@ -442,9 +423,9 @@ if alpr_df is not None:
     alpr_sites = int(ok.sum())
     alpr_hits  = int(hits[ok].sum())
     etas       = dist / max(drone_speed, 1e-9) * 3600
-    alpr_eta   = float((etas[ok]*hits[ok]).sum() / hits[ok].sum()) if hits[ok].sum()>0 else np.nan
+    alpr_eta   = float((etas[ok]*hits[ok]).sum() / hits[ok].sum()) if hits[ok].sum() > 0 else np.nan
 
-# ─── Audio metrics: direct Hit Latitude/Longitude only ──────────────────────
+# --- Audio metrics: direct Hit Latitude/Longitude only ──────────────────────
 audio_sites = audio_hits = audio_eta = 0
 if audio_df is not None:
     # 1) Read & coerce the hit‐coords
@@ -457,17 +438,30 @@ if audio_df is not None:
     lat_b = lat_b[valid].values
     lon_b = lon_b[valid].values
     hits2 = hits2[valid.values]
-    # 4) Distance + in-range filter
+    # 4) Distance + in‐range filter
     dist2 = haversine_min(lat_b, lon_b, launch_coords)
     ok2   = (dist2 <= drone_range) & np.isfinite(dist2)
     audio_sites = int(ok2.sum())
     audio_hits  = int(hits2[ok2].sum())
-    # 5) Compute hits-weighted ETA (each hit weight=1)
-    etas2 = dist2 / max(drone_speed, 1e-9) * 3600
+    # 5) Compute hits‐weighted ETA (each hit weight=1)
+    etas2     = dist2 / max(drone_speed, 1e-9) * 3600
     audio_eta = float((etas2[ok2] * hits2[ok2]).sum() / audio_hits) if audio_hits > 0 else np.nan
 
 # combine for your overall “DFR + ALPR + Audio” metric
 dfr_alpr_audio = alpr_hits + audio_hits
+
+# ─── NEW: Total unfiltered ALPR + Audio hits ───────────────────────────────
+total_alpr_hits  = 0
+total_audio_hits = 0
+
+if alpr_df is not None:
+    last_col = alpr_df.columns[-1]
+    total_alpr_hits = pd.to_numeric(alpr_df[last_col], errors="coerce").fillna(0).sum()
+
+if audio_df is not None:
+    total_audio_hits = pd.to_numeric(audio_df.iloc[:, 4], errors="coerce").fillna(0).sum()
+
+total_alpr_audio = int(total_alpr_hits + total_audio_hits)
 
 # ─── NEW: Total unfiltered ALPR + Audio hits ───────────────────────────────
 total_alpr_hits  = 0
