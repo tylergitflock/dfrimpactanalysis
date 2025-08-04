@@ -397,7 +397,7 @@ progress.progress(95)
 alpr_df  = pd.read_csv(alpr_file)  if alpr_file  else None
 audio_df = pd.read_csv(audio_file) if audio_file else None
 
-# --- ALPR metrics (new columns: D=hits, I=reason, J=lat, K=lon) ---
+# --- ALPR metrics (unchanged) ---
 alpr_sites = alpr_hits = alpr_eta = 0
 if alpr_df is not None:
     hits    = pd.to_numeric(alpr_df.iloc[:, 3], errors="coerce").fillna(0).values
@@ -425,30 +425,54 @@ if alpr_df is not None:
     etas       = dist / max(drone_speed, 1e-9) * 3600
     alpr_eta   = float((etas[ok]*hits[ok]).sum() / hits[ok].sum()) if hits[ok].sum() > 0 else np.nan
 
-# --- Audio metrics: direct Hit Latitude/Longitude only ──────────────────────
+# --- Audio metrics: count unique locations + total hits, weighted ETA & heat data ───
 audio_sites = audio_hits = audio_eta = 0
+audio_pts   = None
+
 if audio_df is not None:
-    # 1) Read & coerce the hit‐coords
+    # 1) ensure the hit‐coords columns exist
     lat_b = pd.to_numeric(audio_df["Hit Latitude"], errors="coerce")
     lon_b = pd.to_numeric(audio_df["Hit Longitude"], errors="coerce")
-    # 2) One hit per row
-    hits2 = np.ones(len(audio_df), dtype=float)
-    # 3) Drop any rows lacking valid coords
+
+    # 2) drop invalid
     valid = lat_b.notna() & lon_b.notna()
-    lat_b = lat_b[valid].values
-    lon_b = lon_b[valid].values
-    hits2 = hits2[valid.values]
-    # 4) Distance + in‐range filter
-    dist2 = haversine_min(lat_b, lon_b, launch_coords)
-    ok2   = (dist2 <= drone_range) & np.isfinite(dist2)
-    audio_sites = int(ok2.sum())
-    audio_hits  = int(hits2[ok2].sum())
-    # 5) Compute hits‐weighted ETA (each hit weight=1)
-    etas2     = dist2 / max(drone_speed, 1e-9) * 3600
-    audio_eta = float((etas2[ok2] * hits2[ok2]).sum() / audio_hits) if audio_hits > 0 else np.nan
+    df_hits = pd.DataFrame({
+      "lat": lat_b[valid],
+      "lon": lon_b[valid]
+    })
+
+    # 3) group by location
+    grp = df_hits.groupby(["lat","lon"]).size().reset_index(name="count")
+
+    audio_sites = len(grp)                # unique locations
+    audio_hits  = int(grp["count"].sum()) # total rows/hits
+
+    # 4) compute distance & ETA per location
+    coords = list(zip(grp["lat"], grp["lon"]))
+    dist2  = haversine_min(grp["lat"].values, grp["lon"].values, launch_coords)
+    etas2  = dist2 / max(drone_speed,1e-9) * 3600
+
+    # 5) hits‐weighted average ETA
+    audio_eta = float((etas2 * grp["count"].values).sum() / audio_hits) if audio_hits>0 else np.nan
+
+    # 6) prepare for heatmap: use [lat, lon, intensity] tuples
+    audio_pts = grp.rename(columns={"lat":"lat","lon":"lon"})
 
 # combine for your overall “DFR + ALPR + Audio” metric
 dfr_alpr_audio = alpr_hits + audio_hits
+
+# ─── NEW: Total unfiltered ALPR + Audio hits ───────────────────────────────
+total_alpr_hits  = 0
+total_audio_hits = 0
+
+if alpr_df is not None:
+    last_col = alpr_df.columns[-1]
+    total_alpr_hits = pd.to_numeric(alpr_df[last_col], errors="coerce").fillna(0).sum()
+
+if audio_df is not None:
+    total_audio_hits = audio_hits  # since each row was one hit
+
+total_alpr_audio = int(total_alpr_hits + total_audio_hits)
 
 # ─── NEW: Total unfiltered ALPR + Audio hits ───────────────────────────────
 total_alpr_hits  = 0
@@ -618,10 +642,16 @@ def render_map(
             fill=False
         ).add_to(m)
 
-    # heat or points
+        # heat or points
     if heat and not df_pts.empty:
+        # if you've passed in a 'count' column, use it as intensity
+        if "count" in df_pts.columns:
+            data = df_pts[["lat", "lon", "count"]].values.tolist()
+        else:
+            data = df_pts[["lat", "lon"]].values.tolist()
+
         HeatMap(
-            df_pts[["lat","lon"]].values.tolist(),
+            data,
             radius=heat_radius,
             blur=heat_blur
         ).add_to(m)
