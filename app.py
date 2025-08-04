@@ -162,32 +162,37 @@ for col in ["Location Name","Address","Lat","Lon"]:
     if col not in launch_df:
         launch_df[col] = ""
 
-# 2c) Geocode any rows with Address but missing Lat/Lon
-from geopy.geocoders import Nominatim
-from geopy.extra.rate_limiter import RateLimiter
-
-geolocator = Nominatim(user_agent="dfrimpact")
-geocode    = RateLimiter(geolocator.geocode, min_delay_seconds=1)
-
-@st.cache_data(show_spinner=False)
-def lookup(addr):
-    try:
-        loc = geocode(addr)
-        return (loc.latitude, loc.longitude) if loc else (None, None)
-    except:
-        return (None, None)
-
-to_geocode = launch_df["Address"].notna() & (
-    pd.to_numeric(launch_df["Lat"], errors="coerce").isna() |
-    pd.to_numeric(launch_df["Lon"], errors="coerce").isna()
+# ─── 2c) Launch-location validation (geocoding disabled) ────────────────────
+st.sidebar.info(
+    "⚠️  Automatic geocoding is turned **off** for now. "
+    "Please make sure your Launch Locations CSV already contains numeric "
+    "`Lat` and `Lon` columns for every row."
 )
-for idx in launch_df.loc[to_geocode].index:
-    lat, lon = lookup(launch_df.at[idx, "Address"])
-    launch_df.at[idx, "Lat"]  = lat
-    launch_df.at[idx, "Lon"]  = lon
 
-st.sidebar.subheader("Geocoded Launch Locations")
+# 2c-1) Force Lat/Lon to numeric (anything non-numeric → NaN)
+launch_df["Lat"] = pd.to_numeric(launch_df["Lat"], errors="coerce")
+launch_df["Lon"] = pd.to_numeric(launch_df["Lon"], errors="coerce")
+
+# 2c-2) Show the table so the user can spot blanks quickly
+st.sidebar.subheader("Launch Locations Preview")
 st.sidebar.dataframe(launch_df)
+
+# 2c-3) Hard stop if any Lat/Lon still missing
+valid_coords = launch_df["Lat"].notna() & launch_df["Lon"].notna()
+if not valid_coords.all():
+    bad = launch_df.loc[~valid_coords, ["Location Name", "Address", "Lat", "Lon"]]
+    st.sidebar.error(
+        "🚫 Some rows are missing valid Lat/Lon. "
+        "Fix them in the CSV and reload:\n\n" + bad.to_csv(index=False)
+    )
+    st.stop()
+
+# 2c-4) Build the list of launch coordinates for downstream use
+launch_coords = list(
+    launch_df[["Lat", "Lon"]]
+        .astype(float)
+        .itertuples(index=False, name=None)
+)
 
 # 2d) Final validation: every row must now have numeric Lat & Lon
 valid_coords = (
