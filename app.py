@@ -367,15 +367,36 @@ df_all.columns = df_all.columns.str.lower().str.strip()
 # ─── 2f) Drop any rows with missing or non-positive patrol response
 df_all = df_all[df_all["patrol_sec"] > 0].copy()
 
-dfr_map = set(agency_df.loc[agency_df["DFR Response (Y/N)"].astype(str).str.upper()=="Y","Call Type"]
-              .str.upper().str.strip())
-clr_map = set(agency_df.loc[agency_df["Clearable (Y/N)"].astype(str).str.upper()=="Y","Call Type"]
-              .str.upper().str.strip())
+# ─── 3a) DEFINE DFR & CLEARABLE SETS & SUBSETS ───────────────────────────────
+dfr_map = set(
+    agency_df.loc[
+        agency_df["DFR Response (Y/N)"].str.upper() == "Y",
+        "Call Type"
+    ]
+    .str.upper().str.strip()
+)
+clr_map = set(
+    agency_df.loc[
+        agency_df["Clearable (Y/N)"].str.upper() == "Y",
+        "Call Type"
+    ]
+    .str.upper().str.strip()
+)
 
-dfr_only  = df_all[df_all["call_type_up"].isin(dfr_map) & df_all["patrol_sec"].gt(0)].copy()
-in_range  = dfr_only[dfr_only["dist_mi"].le(drone_range)].copy()
-clearable = in_range[in_range["call_type_up"].isin(clr_map)].copy()
+dfr_only  = df_all[
+    df_all["call_type_up"].isin(dfr_map)
+].copy()
 
+in_range  = dfr_only[
+    dfr_only["dist_mi"] <= drone_range
+].copy()
+
+clearable = in_range[
+    in_range["call_type_up"].isin(clr_map)
+].copy()
+# ─── end subsets ─────────────────────────────────────────────────────────────
+
+# now your existing hotspot code follows:
 hotspot_count = 0
 hotspot_avg_patrol = float("nan")
 hotspot_avg_drone = float("nan")
@@ -388,14 +409,17 @@ if hotspot_coords:
         hotspot_coords
     )
     # restrict to the DFR-only calls (or whichever set you prefer)
-    mask = (all_hot_dists <= 0.5) & df_all["patrol_sec"].gt(0) & df_all["call_type_up"].isin(dfr_map)
+    mask = (
+        (all_hot_dists <= 0.5)
+        & df_all["patrol_sec"].gt(0)
+        & df_all["call_type_up"].isin(dfr_map)
+    )
     hotspot_df = df_all.loc[mask].copy()
 
-    hotspot_count         = len(hotspot_df)
-    hotspot_avg_patrol    = average(hotspot_df["patrol_sec"])
-    hotspot_avg_drone     = average(hotspot_df["drone_eta_sec"])
+    hotspot_count      = len(hotspot_df)
+    hotspot_avg_patrol = average(hotspot_df["patrol_sec"])
+    hotspot_avg_drone  = average(hotspot_df["drone_eta_sec"])
 progress.progress(95)
-
 # ─── 3) OPTIONAL ALPR & AUDIO METRICS (new ALPR format) ────────────────────
 alpr_df  = pd.read_csv(alpr_file)  if alpr_file  else None
 audio_df = pd.read_csv(audio_file) if audio_file else None
@@ -405,13 +429,20 @@ alpr_sites = alpr_hits = alpr_eta = 0
 audio_sites = audio_hits = audio_eta = 0
 audio_pts   = None
 
-# --- ALPR metrics (unchanged, but filtered in-range) ---
+# --- ALPR metrics (filtered in-range) ---
+alpr_sites = alpr_hits = alpr_eta = 0
 if alpr_df is not None:
+    # 1) hit counts (still in col 3)
     hits    = pd.to_numeric(alpr_df.iloc[:, 3], errors="coerce").fillna(0).values
-    reasons = alpr_df.iloc[:, 8].astype(str).str.upper().str.strip()
-    lat_a   = pd.to_numeric(alpr_df.iloc[:, 9], errors="coerce").values
-    lon_a   = pd.to_numeric(alpr_df.iloc[:,10], errors="coerce").values
+    
+    # 2) reasons (still in col 8)
+    reasons = alpr_df.iloc[:, 8].astype(str).str.upper().str.strip().values
+    
+    # 3) **correct** lat/lon from cols 1 & 2
+    lat_a   = pd.to_numeric(alpr_df.iloc[:, 1], errors="coerce").values
+    lon_a   = pd.to_numeric(alpr_df.iloc[:, 2], errors="coerce").values
 
+    # 4) your existing reason filter
     alpr_reason_set = {
         "GANG OR SUSPECTED TERRORIST",
         "MISSING PERSON",
@@ -421,17 +452,24 @@ if alpr_df is not None:
         "STOLEN VEHICLE",
         "VIOLENT PERSON"
     }
-
     ok_reason = reasons.isin(alpr_reason_set)
-    dist      = haversine_min(lat_a, lon_a, launch_coords)
-    in_range  = (dist <= drone_range) & np.isfinite(dist)
-    ok        = ok_reason & in_range
 
+    # 5) compute distance & range mask
+    dist     = haversine_min(lat_a, lon_a, launch_coords)
+    in_range = (dist <= drone_range) & np.isfinite(dist)
+
+    # 6) only keep hits that meet both criteria
+    ok       = ok_reason & in_range
+
+    # 7) aggregate
     alpr_sites = int(ok.sum())
     alpr_hits  = int(hits[ok].sum())
     etas       = dist / max(drone_speed, 1e-9) * 3600
-    alpr_eta   = float((etas[ok] * hits[ok]).sum() / hits[ok].sum()) if hits[ok].sum() > 0 else np.nan
-
+    alpr_eta   = (
+        float((etas[ok] * hits[ok]).sum() / hits[ok].sum())
+        if hits[ok].sum() > 0 else np.nan
+    )
+# ─ end ALPR metrics ─
 # --- Audio metrics (stats only for in-range; heatmap still uses all points) ---
 if audio_df is not None:
     lat_b      = pd.to_numeric(audio_df["Hit Latitude"], errors="coerce")
