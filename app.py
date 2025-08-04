@@ -462,64 +462,32 @@ if audio_df is not None:
 dfr_alpr_audio = alpr_hits + audio_hits
 
 # ─── NEW: Total unfiltered ALPR + Audio hits ───────────────────────────────
-total_alpr_hits  = 0
+total_alpr_hits = 0
 total_audio_hits = 0
 
 if alpr_df is not None:
-    last_col = alpr_df.columns[-1]
-    total_alpr_hits = pd.to_numeric(alpr_df[last_col], errors="coerce").fillna(0).sum()
+    # only sum hits on rows that have a valid latitude (to skip any footer rows)
+    lat_valid = pd.to_numeric(alpr_df.iloc[:, 9], errors="coerce").notna()
+    hits_raw  = pd.to_numeric(alpr_df.iloc[:, 3], errors="coerce").fillna(0)
+    total_alpr_hits = int(hits_raw[lat_valid].sum())
 
 if audio_df is not None:
-    total_audio_hits = audio_hits  # since each row was one hit
-
-total_alpr_audio = int(total_alpr_hits + total_audio_hits)
-
-# ─── NEW: Total unfiltered ALPR + Audio hits ───────────────────────────────
-total_alpr_hits  = 0
-total_audio_hits = 0
-
-# ALPR: sum hits in column D (index 3)
-if alpr_df is not None:
-    total_alpr_hits = (
-        pd.to_numeric(alpr_df.iloc[:, 3], errors="coerce")
-          .fillna(0)
-          .sum()
-    )
-
-# Audio: sum the 'Count of Audio Hit Id' column if it exists, otherwise count rows
-if audio_df is not None:
+    # if they gave you an explicit count column, use it…
     if "Count of Audio Hit Id" in audio_df.columns:
-        total_audio_hits = (
+        total_audio_hits = int(
             pd.to_numeric(audio_df["Count of Audio Hit Id"], errors="coerce")
               .fillna(0)
               .sum()
         )
     else:
-        # no explicit count column, assume one hit per row
+        # otherwise assume 1 hit per row
         total_audio_hits = len(audio_df)
 
-total_alpr_audio = int(total_alpr_hits + total_audio_hits)
+total_alpr_audio = total_alpr_hits + total_audio_hits
 
-# ─── NEW: Total unfiltered ALPR + Audio hits ───────────────────────────────
-total_alpr_hits  = 0
-total_audio_hits = 0
-
-if alpr_df is not None:
-    last_col = alpr_df.columns[-1]
-    total_alpr_hits = (
-        pd.to_numeric(alpr_df[last_col], errors="coerce")
-          .fillna(0)
-          .sum()
-    )
-
-if audio_df is not None:
-    total_audio_hits = (
-        pd.to_numeric(audio_df.iloc[:,4], errors="coerce")
-          .fillna(0)
-          .sum()
-    )
-
-total_alpr_audio = int(total_alpr_hits + total_audio_hits)
+# ─── DEBUG (you can remove these once you confirm) ──────────────────────────
+st.sidebar.write(f"Total unfiltered ALPR hits: {total_alpr_hits}")
+st.sidebar.write(f"Total unfiltered Audio hits: {total_audio_hits}")
 
 # ─── 4) METRICS & REPORT ─────────────────────────────────────────────────────
 total_cfs   = raw_count
