@@ -249,53 +249,28 @@ alpr_file  = st.sidebar.file_uploader("Upload ALPR Data CSV", type=["csv"])
 audio_file = st.sidebar.file_uploader("Upload Audio Hits CSV", type=["csv"])
 progress.progress(80)
 
-# ─── 6) Hotspot Area ──────────────────────────────────────────
-st.sidebar.header("6) Hotspot Area")
+# ─── 6) Hotspot Area  (enter coordinates manually) ─────────────────────────
+st.sidebar.header("6) Hotspot Area  (manual entry)")
 
-# 1) Address input
-hotspot_address = st.sidebar.text_input(
-    "Enter Hotspot Address (0.5 mi radius)",
-    help="e.g. “123 Main St, Anytown, USA”"
+hotspot_lat = st.sidebar.number_input(
+    "Hotspot Latitude",  format="%.6f", value=0.0
+)
+hotspot_lon = st.sidebar.number_input(
+    "Hotspot Longitude", format="%.6f", value=0.0
 )
 
-# 2) Manual fallback fields (hidden if geocode succeeds)
-hotspot_lat_manual = st.sidebar.number_input(
-    "Manual Latitude (if geocoding fails)", format="%.6f"
-)
-hotspot_lon_manual = st.sidebar.number_input(
-    "Manual Longitude (if geocoding fails)", format="%.6f"
-)
-
-# always start empty
-hotspot_coords: list[tuple[float,float]] = []
-
-if hotspot_address:
-    # try geocoding
-    coords = lookup(hotspot_address)  # returns (lat, lon) or (None, None)
-    valid_geo = (
-        coords is not None
-        and isinstance(coords[0], (int,float)) and np.isfinite(coords[0])
-        and isinstance(coords[1], (int,float)) and np.isfinite(coords[1])
+# build hotspot_coords only if both numbers are provided and finite
+hotspot_coords: list[tuple[float, float]] = []
+if (
+    hotspot_lat != 0.0 and hotspot_lon != 0.0
+    and np.isfinite(hotspot_lat) and np.isfinite(hotspot_lon)
+):
+    hotspot_coords = [(hotspot_lat, hotspot_lon)]
+else:
+    st.sidebar.info(
+        "Enter a valid latitude **and** longitude if you want the red "
+        "0.5-mile hotspot circle to appear on the maps."
     )
-
-    if valid_geo:
-        # success: use the geocoded point
-        hotspot_coords = [coords]
-    else:
-        # geocoding failed: fall back to manual if provided
-        if (
-            isinstance(hotspot_lat_manual, float)
-            and isinstance(hotspot_lon_manual, float)
-            and np.isfinite(hotspot_lat_manual)
-            and np.isfinite(hotspot_lon_manual)
-        ):
-            hotspot_coords = [(hotspot_lat_manual, hotspot_lon_manual)]
-        else:
-            st.sidebar.error(
-                "Could not geocode that address. "
-                "Please refine the address or enter lat/lon manually."
-            )
-
 # ─── 2) PARSE & COMPUTE ───────────────────────────────────────────────────────
 col_map = {c.lower():c for c in raw_df.columns}
 def pick(*alts):
