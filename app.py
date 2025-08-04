@@ -261,12 +261,24 @@ hotspot_coords: list[tuple[float,float]] = []
 
 if hotspot_address:
     coords = lookup(hotspot_address)
-    # use np.all instead of built-in all()
-    if coords is None or not np.all(np.isfinite(coords)):
+
+    # 1) Did geopy even return anything?
+    if coords is None:
         st.sidebar.error("Unable to geocode that address.")
     else:
-        hotspot_coords = [coords]
+        # 2) Unpack lat/lon
+        lat_hs, lon_hs = coords
 
+        # 3) Check each one for None or non-finite
+        if (lat_hs is None
+            or lon_hs is None
+            or not (isinstance(lat_hs, (int, float)) and np.isfinite(lat_hs))
+            or not (isinstance(lon_hs, (int, float)) and np.isfinite(lon_hs))
+        ):
+            st.sidebar.error("Unable to geocode that address.")
+        else:
+            # 4) All good!
+            hotspot_coords = [(lat_hs, lon_hs)]
 # ─── 2) PARSE & COMPUTE ───────────────────────────────────────────────────────
 col_map = {c.lower():c for c in raw_df.columns}
 def pick(*alts):
