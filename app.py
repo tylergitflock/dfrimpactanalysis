@@ -820,7 +820,6 @@ render_map(
 
 # ─── 6f) Heatmap: ALPR Locations ─────────────────────────────────────────────
 if alpr_df is not None:
-    # build a DataFrame of all valid ALPR points
     alpr_pts = pd.DataFrame({
         "lat": pd.to_numeric(alpr_df.iloc[:,1], errors="coerce"),
         "lon": pd.to_numeric(alpr_df.iloc[:,2], errors="coerce")
@@ -830,7 +829,12 @@ if alpr_df is not None:
     r_al = st.sidebar.slider("ALPR Heat Radius", 1, 50, value=6, key="alpr_r")
     b_al = st.sidebar.slider("ALPR Heat Blur",   1, 50, value=4, key="alpr_b")
 
-    # always render the circle + whatever points you have
+    # ── down-sample if too big ────────────────────
+    max_pts = 10000
+    if len(alpr_pts) > max_pts:
+        alpr_pts = alpr_pts.sample(max_pts, random_state=42)
+
+    # now render
     render_map(
         alpr_pts,
         heat=True,
@@ -842,14 +846,24 @@ if alpr_df is not None:
         launch_coords=launch_coords
     )
 
-# 6g) Heatmap: Audio Locations (using the cleaned audio_pts from above)
-if audio_pts is not None and not audio_pts.empty:
-    # allow the user to tweak radius/blur
+# ─── 6g) Heatmap: Audio Locations ────────────────────────────────────────────
+if audio_df is not None:
+    audio_pts = pd.DataFrame({
+        "lat": pd.to_numeric(audio_df["Hit Latitude"],  errors="coerce"),
+        "lon": pd.to_numeric(audio_df["Hit Longitude"], errors="coerce")
+    }).dropna()
+
+    # allow radius/blur tweaks
     r_au = st.sidebar.slider("Audio Heat Radius", 1, 50, value=4, key="audio_r")
     b_au = st.sidebar.slider("Audio Heat Blur",   1, 50, value=4, key="audio_b")
 
+    # ── down-sample if too big ────────────────────
+    max_pts = 10000
+    if len(audio_pts) > max_pts:
+        audio_pts = audio_pts.sample(max_pts, random_state=42)
+
     render_map(
-        audio_pts,                     # your DataFrame with 'lat' & 'lon'
+        audio_pts,
         heat=True,
         heat_radius=r_au,
         heat_blur=b_au,
