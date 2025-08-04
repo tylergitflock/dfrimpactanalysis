@@ -425,34 +425,50 @@ if alpr_df is not None:
     etas       = dist / max(drone_speed, 1e-9) * 3600
     alpr_eta   = float((etas[ok]*hits[ok]).sum() / hits[ok].sum()) if hits[ok].sum() > 0 else np.nan
 
-# --- Audio metrics: count unique addresses + total hits, ETA & heat data ───
+# --- Audio metrics (stats only for in-range; heatmap still uses all points) ───
 audio_sites = audio_hits = audio_eta = 0
-audio_pts   = None
+audio_pts   = None  # this will remain ALL points, for the map
 
 if audio_df is not None:
-    # 1) count distinct addresses from the "Address" column
-    addresses = audio_df["Address"].astype(str).str.strip()
-    audio_sites = int(addresses.nunique())
-
-    # 2) total hits (each row = one hit, or sum a “Count” column if present)
-    if "Count of Audio Hit Id" in audio_df.columns:
-        audio_hits = int(audio_df["Count of Audio Hit Id"].sum())
-    else:
-        audio_hits = len(audio_df)
-
-    # 3) compute average ETA over every hit’s coords
+    # 1) pull coords & addresses
     lat_b = pd.to_numeric(audio_df["Hit Latitude"], errors="coerce")
     lon_b = pd.to_numeric(audio_df["Hit Longitude"], errors="coerce")
-    valid = lat_b.notna() & lon_b.notna()
-    dist2 = haversine_min(lat_b[valid].values, lon_b[valid].values, launch_coords)
-    etas2 = dist2 / max(drone_speed,1e-9) * 3600
-    audio_eta = float(etas2.mean()) if len(etas2)>0 else np.nan
+    addresses = audio_df["Address"].astype(str).str.strip()
 
-    # 4) prepare heatmap points (one per hit, or collapse by address if you prefer)
+    # 2) drop any totally invalid rows
+    valid_idx = lat_b.notna() & lon_b.notna()
+    lat_v, lon_v, addr_v = lat_b[valid_idx], lon_b[valid_idx], addresses[valid_idx]
+
+    # 3) compute distance & in-range mask
+    dist2    = haversine_min(lat_v.values, lon_v.values, launch_coords)
+    in_range = dist2 <= drone_range
+
+    # ── STATS ONLY ON in_range ───────────────────────────────────────────────
+    # unique-address count
+    audio_sites = int(addr_v[in_range].nunique())
+
+    # total hits
+    if "Count of Audio Hit Id" in audio_df.columns:
+        counts = pd.to_numeric(audio_df.loc[valid_idx, "Count of Audio Hit Id"], errors="coerce").fillna(0)
+        audio_hits = int(counts[in_range].sum())
+    else:
+        audio_hits = int(in_range.sum())
+
+    # hits-weighted average ETA
+    if "Count of Audio Hit Id" in audio_df.columns:
+        weights = counts.astype(int)
+    else:
+        weights = np.ones_like(dist2, dtype=int)
+
+    etas = dist2 / max(drone_speed, 1e-9) * 3600
+    w_sum = (weights[in_range]).sum()
+    audio_eta = float((etas[in_range] * weights[in_range]).sum() / w_sum) if w_sum>0 else np.nan
+
+    # ── HEATMAP DATA = ALL POINTS ────────────────────────────────────────────
     audio_pts = pd.DataFrame({
-        "lat":     lat_b[valid],
-        "lon":     lon_b[valid],
-        "address": addresses[valid]
+        "lat": lat_v.values,
+        "lon": lon_v.values,
+        "address": addr_v.values
     })
 # combine for your overall “DFR + ALPR + Audio” metric
 dfr_alpr_audio = alpr_hits + audio_hits
