@@ -250,27 +250,50 @@ progress.progress(80)
 
 # ─── 6) Hotspot Area ──────────────────────────────────────────
 st.sidebar.header("6) Hotspot Area")
+
+# 1) Address input
 hotspot_address = st.sidebar.text_input(
     "Enter Hotspot Address (0.5 mi radius)",
     help="e.g. “123 Main St, Anytown, USA”"
 )
 
-hotspot_coords: list[tuple[float,float]] = []
-if hotspot_address:
-    try:
-        coords = lookup(hotspot_address)  # may return (lat, lon) or (None,None)
-        lat_hs, lon_hs = coords if coords is not None else (None, None)
+# 2) Manual fallback fields (hidden if geocode succeeds)
+hotspot_lat_manual = st.sidebar.number_input(
+    "Manual Latitude (if geocoding fails)", format="%.6f"
+)
+hotspot_lon_manual = st.sidebar.number_input(
+    "Manual Longitude (if geocoding fails)", format="%.6f"
+)
 
-        # only accept real, finite numbers
+# always start empty
+hotspot_coords: list[tuple[float,float]] = []
+
+if hotspot_address:
+    # try geocoding
+    coords = lookup(hotspot_address)  # returns (lat, lon) or (None, None)
+    valid_geo = (
+        coords is not None
+        and isinstance(coords[0], (int,float)) and np.isfinite(coords[0])
+        and isinstance(coords[1], (int,float)) and np.isfinite(coords[1])
+    )
+
+    if valid_geo:
+        # success: use the geocoded point
+        hotspot_coords = [coords]
+    else:
+        # geocoding failed: fall back to manual if provided
         if (
-            isinstance(lat_hs, (int, float)) and np.isfinite(lat_hs)
-            and isinstance(lon_hs, (int, float)) and np.isfinite(lon_hs)
+            isinstance(hotspot_lat_manual, float)
+            and isinstance(hotspot_lon_manual, float)
+            and np.isfinite(hotspot_lat_manual)
+            and np.isfinite(hotspot_lon_manual)
         ):
-            hotspot_coords = [(lat_hs, lon_hs)]
+            hotspot_coords = [(hotspot_lat_manual, hotspot_lon_manual)]
         else:
-            st.sidebar.warning("⚠️ Couldn’t geocode that address; skipping hotspot overlay.")
-    except Exception as e:
-        st.sidebar.warning(f"⚠️ Geocoding error, skipping hotspot: {e}")
+            st.sidebar.error(
+                "Could not geocode that address. "
+                "Please refine the address or enter lat/lon manually."
+            )
 
 # ─── 2) PARSE & COMPUTE ───────────────────────────────────────────────────────
 col_map = {c.lower():c for c in raw_df.columns}
@@ -426,16 +449,11 @@ if hotspot_coords:
     hotspot_avg_drone  = average(hotspot_df["drone_eta_sec"])
 progress.progress(95)
 # ─── 3) OPTIONAL ALPR & AUDIO METRICS (new ALPR format) ────────────────────
-alpr_df = pd.read_csv(alpr_file) if alpr_file else None
-
+alpr_df  = pd.read_csv(alpr_file)  if alpr_file  else None
 if alpr_df is not None:
-    try:
-        st.sidebar.write("ALPR rows loaded:", alpr_df.shape[0])
-        st.sidebar.write("ALPR columns:", alpr_df.columns.tolist())
-        st.sidebar.write("ALPR sample rows:", alpr_df.head(3))
-    except Exception as e:
-        st.sidebar.error(f"Debug block failed: {e}")
-
+    st.sidebar.write(f"ALPR rows loaded: {alpr_df.shape[0]}")
+    st.sidebar.write("ALPR first 3 rows:", alpr_df.head(3))
+    st.sidebar.write("ALPR last 3 rows:", alpr_df.tail(3))
 audio_df = pd.read_csv(audio_file) if audio_file else None
 
 
@@ -818,23 +836,14 @@ render_map(
     launch_coords=launch_coords
 )
 
-# ─── 6f) Heatmap: ALPR Locations ─────────────────────────────────────────────
+# 6f) Heatmap: ALPR Locations (fixed 6/4)
 if alpr_df is not None:
     alpr_pts = pd.DataFrame({
-        "lat": pd.to_numeric(alpr_df.iloc[:,1], errors="coerce"),
-        "lon": pd.to_numeric(alpr_df.iloc[:,2], errors="coerce")
+        "lat": pd.to_numeric(alpr_df.iloc[:,1],errors="coerce"),
+        "lon": pd.to_numeric(alpr_df.iloc[:,2],errors="coerce")
     }).dropna()
-
-    # allow radius/blur tweaks
     r_al = st.sidebar.slider("ALPR Heat Radius", 1, 50, value=6, key="alpr_r")
     b_al = st.sidebar.slider("ALPR Heat Blur",   1, 50, value=4, key="alpr_b")
-
-    # ── down-sample if too big ────────────────────
-    max_pts = 10000
-    if len(alpr_pts) > max_pts:
-        alpr_pts = alpr_pts.sample(max_pts, random_state=42)
-
-    # now render
     render_map(
         alpr_pts,
         heat=True,
@@ -846,24 +855,14 @@ if alpr_df is not None:
         launch_coords=launch_coords
     )
 
-# ─── 6g) Heatmap: Audio Locations ────────────────────────────────────────────
-if audio_df is not None:
-    audio_pts = pd.DataFrame({
-        "lat": pd.to_numeric(audio_df["Hit Latitude"],  errors="coerce"),
-        "lon": pd.to_numeric(audio_df["Hit Longitude"], errors="coerce")
-    }).dropna()
-
-    # allow radius/blur tweaks
+# 6g) Heatmap: Audio Locations (using the cleaned audio_pts from above)
+if audio_pts is not None and not audio_pts.empty:
+    # allow the user to tweak radius/blur
     r_au = st.sidebar.slider("Audio Heat Radius", 1, 50, value=4, key="audio_r")
     b_au = st.sidebar.slider("Audio Heat Blur",   1, 50, value=4, key="audio_b")
 
-    # ── down-sample if too big ────────────────────
-    max_pts = 10000
-    if len(audio_pts) > max_pts:
-        audio_pts = audio_pts.sample(max_pts, random_state=42)
-
     render_map(
-        audio_pts,
+        audio_pts,                     # your DataFrame with 'lat' & 'lon'
         heat=True,
         heat_radius=r_au,
         heat_blur=b_au,
