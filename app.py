@@ -461,16 +461,25 @@ audio_pts   = None
 alpr_sites = alpr_hits = alpr_eta = 0
 if alpr_df is not None:
     # 1) hit counts (still in col 3)
-    hits    = pd.to_numeric(alpr_df.iloc[:, 3], errors="coerce").fillna(0).values
-    
-    # 2) reasons (still in col 8), keep as a Series so .isin works
-    reasons = alpr_df.iloc[:, 8].astype(str).str.upper().str.strip()
-    
-    # 3) **correct** lat/lon from cols 1 & 2
-    lat_a   = pd.to_numeric(alpr_df.iloc[:, 1], errors="coerce").values
-    lon_a   = pd.to_numeric(alpr_df.iloc[:, 2], errors="coerce").values
+    hits = (
+        pd.to_numeric(alpr_df.iloc[:, 3], errors="coerce")
+          .fillna(0)
+          .values
+    )
 
-    # 4) your existing reason filter
+    # 2) reasons (keep as Series so .isin works)
+    reasons = (
+        alpr_df.iloc[:, 8]
+          .astype(str)
+          .str.upper()
+          .str.strip()
+    )
+
+    # 3) correct lat/lon from cols 1 & 2
+    lat_a = pd.to_numeric(alpr_df.iloc[:, 1], errors="coerce").values
+    lon_a = pd.to_numeric(alpr_df.iloc[:, 2], errors="coerce").values
+
+    # 4) filter by reason list
     alpr_reason_set = {
         "GANG OR SUSPECTED TERRORIST",
         "MISSING PERSON",
@@ -482,21 +491,24 @@ if alpr_df is not None:
     }
     ok_reason = reasons.isin(alpr_reason_set)
 
-    # 5) compute distance & range mask
-    dist     = haversine_min(lat_a, lon_a, launch_coords)
-    in_range = (dist <= drone_range) & np.isfinite(dist)
+    # 5) compute distance & in-range mask for ALPR
+    dist = haversine_min(lat_a, lon_a, launch_coords)
+    alpr_in_range = (dist <= drone_range) & np.isfinite(dist)
 
-    # 6) only keep hits that meet both criteria
-    ok       = ok_reason & in_range
+    # 6) combine reason + range
+    alpr_ok_mask = ok_reason & alpr_in_range
 
     # 7) aggregate
-    alpr_sites = int(ok.sum())
-    alpr_hits  = int(hits[ok].sum())
-    etas       = dist / max(drone_speed, 1e-9) * 3600
-    alpr_eta   = (
-        float((etas[ok] * hits[ok]).sum() / hits[ok].sum())
-        if hits[ok].sum() > 0 else np.nan
-    )
+    alpr_sites = int(alpr_ok_mask.sum())
+    alpr_hits  = int(hits[alpr_ok_mask].sum())
+
+    # 8) weighted ETA
+    etas = dist / max(drone_speed, 1e-9) * 3600
+    if hits[alpr_ok_mask].sum() > 0:
+        alpr_eta = float((etas[alpr_ok_mask] * hits[alpr_ok_mask]).sum()
+                         / hits[alpr_ok_mask].sum())
+    else:
+        alpr_eta = np.nan
 # ─ end ALPR metrics ─
 # --- Audio metrics (stats only for in-range; heatmap still uses all points) ---
 if audio_df is not None:
