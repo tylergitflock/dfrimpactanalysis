@@ -162,10 +162,32 @@ for col in ["Location Name","Address","Lat","Lon"]:
     if col not in launch_df:
         launch_df[col] = ""
 
-st.sidebar.info(
-    "⚠️  Geocoding disabled. Please include numeric Lat & Lon columns in your "
-    "Launch Locations CSV."
+# ─── 2c) Geocode any rows with Address but missing Lat/Lon ──────────────────
+from geopy.geocoders import Nominatim
+from geopy.extra.rate_limiter import RateLimiter
+
+geolocator = Nominatim(user_agent="dfrimpact")
+geocode    = RateLimiter(geolocator.geocode, min_delay_seconds=1)
+
+@st.cache_data(show_spinner=False)
+def lookup(addr):
+    try:
+        loc = geocode(addr)
+        return (loc.latitude, loc.longitude) if loc else (None, None)
+    except:
+        return (None, None)
+
+to_geocode = launch_df["Address"].notna() & (
+    pd.to_numeric(launch_df["Lat"], errors="coerce").isna() |
+    pd.to_numeric(launch_df["Lon"], errors="coerce").isna()
 )
+for idx in launch_df.loc[to_geocode].index:
+    lat, lon = lookup(launch_df.at[idx, "Address"])
+    launch_df.at[idx, "Lat"]  = lat
+    launch_df.at[idx, "Lon"]  = lon
+
+# show the updated table so you can verify any blanks
+st.sidebar.subheader("Geocoded Launch Locations")
 st.sidebar.dataframe(launch_df)
 
 # 2d) Final validation: every row must now have numeric Lat & Lon
