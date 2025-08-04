@@ -278,7 +278,7 @@ col_close  = pick("Call Close","Fixed Time Call Closed")
 col_type   = pick("Call Type")
 col_pri    = pick("Call Priority")
 col_lat    = pick("Lat")
-col_lon    = pick("Lon")
+col_lon    = pick("Lon","Long")
 col_dispatch = pick(
   "First Dispatch",
   "Time First Unit Assigned",
