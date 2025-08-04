@@ -430,18 +430,17 @@ audio_sites = audio_hits = audio_eta = 0
 audio_pts   = None
 
 if audio_df is not None:
-    # 1) count distinct addresses
-    #    (make sure "address" matches exactly your column name or use audio_df.columns to confirm)
-    audio_sites = int(audio_df["address"].astype(str).str.strip().nunique())
+    # 1) count distinct addresses from the "Address" column
+    addresses = audio_df["Address"].astype(str).str.strip()
+    audio_sites = int(addresses.nunique())
 
-    # 2) total hits (each row is one hit, or sum a “Count” column if you have one)
+    # 2) total hits (each row = one hit, or sum a “Count” column if present)
     if "Count of Audio Hit Id" in audio_df.columns:
         audio_hits = int(audio_df["Count of Audio Hit Id"].sum())
     else:
         audio_hits = len(audio_df)
 
-    # 3) ETA: if you still want an average response time, compute it over every row’s lat/lon
-    #    (this doesn’t require geocoding—just uses the existing Hit Latitude/Longitude)
+    # 3) compute average ETA over every hit’s coords
     lat_b = pd.to_numeric(audio_df["Hit Latitude"], errors="coerce")
     lon_b = pd.to_numeric(audio_df["Hit Longitude"], errors="coerce")
     valid = lat_b.notna() & lon_b.notna()
@@ -449,13 +448,12 @@ if audio_df is not None:
     etas2 = dist2 / max(drone_speed,1e-9) * 3600
     audio_eta = float(etas2.mean()) if len(etas2)>0 else np.nan
 
-    # 4) heatmap points: still use each hit’s coords (or collapse per address if you like)
+    # 4) prepare heatmap points (one per hit, or collapse by address if you prefer)
     audio_pts = pd.DataFrame({
-        "lat": lat_b[valid],
-        "lon": lon_b[valid],
-        "address": audio_df.loc[valid, "address"].astype(str).str.strip()
+        "lat":     lat_b[valid],
+        "lon":     lon_b[valid],
+        "address": addresses[valid]
     })
-
 # combine for your overall “DFR + ALPR + Audio” metric
 dfr_alpr_audio = alpr_hits + audio_hits
 
