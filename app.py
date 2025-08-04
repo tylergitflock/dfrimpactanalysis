@@ -836,14 +836,19 @@ render_map(
     launch_coords=launch_coords
 )
 
-# 6f) Heatmap: ALPR Locations (fixed 6/4)
+# ─── 6f) Heatmap: ALPR Locations ─────────────────────────────────────────────
 if alpr_df is not None:
+    # build a DataFrame of all valid ALPR points
     alpr_pts = pd.DataFrame({
-        "lat": pd.to_numeric(alpr_df.iloc[:,1],errors="coerce"),
-        "lon": pd.to_numeric(alpr_df.iloc[:,2],errors="coerce")
+        "lat": pd.to_numeric(alpr_df.iloc[:,1], errors="coerce"),
+        "lon": pd.to_numeric(alpr_df.iloc[:,2], errors="coerce")
     }).dropna()
+
+    # allow radius/blur tweaks
     r_al = st.sidebar.slider("ALPR Heat Radius", 1, 50, value=6, key="alpr_r")
     b_al = st.sidebar.slider("ALPR Heat Blur",   1, 50, value=4, key="alpr_b")
+
+    # always render the circle + whatever points you have
     render_map(
         alpr_pts,
         heat=True,
