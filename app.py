@@ -434,8 +434,9 @@ if alpr_df is not None:
     alpr_hits  = int(hits[ok].sum())
     etas       = dist / max(drone_speed, 1e-9) * 3600
     alpr_eta   = float((etas[ok]*hits[ok]).sum() / hits[ok].sum()) if hits[ok].sum() > 0 else np.nan
+# End of ALPR metrics
 
-# --- Audio metrics (stats only for in-range; heatmap still uses all points) ───
+# --- Audio metrics (stats only for in-range; heatmap still uses all points) ---
 audio_sites = audio_hits = audio_eta = 0
 audio_pts   = None  # this will remain ALL points, for the map
 
@@ -454,24 +455,17 @@ if audio_df is not None:
     in_range = dist2 <= drone_range
 
     # ── STATS ONLY ON in_range ───────────────────────────────────────────────
-    # unique-address count
     audio_sites = int(addr_v[in_range].nunique())
-
-    # total hits
     if "Count of Audio Hit Id" in audio_df.columns:
         counts = pd.to_numeric(audio_df.loc[valid_idx, "Count of Audio Hit Id"], errors="coerce").fillna(0)
         audio_hits = int(counts[in_range].sum())
-    else:
-        audio_hits = int(in_range.sum())
-
-    # hits-weighted average ETA
-    if "Count of Audio Hit Id" in audio_df.columns:
         weights = counts.astype(int)
     else:
+        audio_hits = int(in_range.sum())
         weights = np.ones_like(dist2, dtype=int)
 
     etas = dist2 / max(drone_speed, 1e-9) * 3600
-    w_sum = (weights[in_range]).sum()
+    w_sum = weights[in_range].sum()
     audio_eta = float((etas[in_range] * weights[in_range]).sum() / w_sum) if w_sum>0 else np.nan
 
     # ── HEATMAP DATA = ALL POINTS ────────────────────────────────────────────
@@ -480,21 +474,21 @@ if audio_df is not None:
         "lon": lon_v.values,
         "address": addr_v.values
     })
-# combine for your overall “DFR + ALPR + Audio” metric
+# End of Audio metrics
+
+# combine for your overall “DFR + ALPR + Audio” metric (no indentation!)
 dfr_alpr_audio = alpr_hits + audio_hits
 
 # ─── NEW: Total unfiltered ALPR + Audio hits ───────────────────────────────
-total_alpr_hits = 0
+total_alpr_hits  = 0
 total_audio_hits = 0
 
 if alpr_df is not None:
-    # only sum hits on rows that have a valid latitude (to skip any footer rows)
     lat_valid = pd.to_numeric(alpr_df.iloc[:, 9], errors="coerce").notna()
     hits_raw  = pd.to_numeric(alpr_df.iloc[:, 3], errors="coerce").fillna(0)
     total_alpr_hits = int(hits_raw[lat_valid].sum())
 
 if audio_df is not None:
-    # if they gave you an explicit count column, use it…
     if "Count of Audio Hit Id" in audio_df.columns:
         total_audio_hits = int(
             pd.to_numeric(audio_df["Count of Audio Hit Id"], errors="coerce")
@@ -502,10 +496,13 @@ if audio_df is not None:
               .sum()
         )
     else:
-        # otherwise assume 1 hit per row
         total_audio_hits = len(audio_df)
 
 total_alpr_audio = total_alpr_hits + total_audio_hits
+
+# ─── DEBUG (you can remove these once you confirm) ──────────────────────────
+st.sidebar.write(f"Total unfiltered ALPR hits: {total_alpr_hits}")
+st.sidebar.write(f"Total unfiltered Audio hits: {total_audio_hits}")
 
 # ─── DEBUG (you can remove these once you confirm) ──────────────────────────
 st.sidebar.write(f"Total unfiltered ALPR hits: {total_alpr_hits}")
