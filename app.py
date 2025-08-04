@@ -451,13 +451,10 @@ progress.progress(95)
 # ─── 3) OPTIONAL ALPR & AUDIO METRICS (new ALPR format) ────────────────────
 alpr_df  = pd.read_csv(alpr_file)  if alpr_file  else None
 if alpr_df is not None:
-    st.sidebar.write(f"Total rows in ALPR file: {alpr_df.shape[0]}")
+    st.sidebar.write(f"ALPR rows loaded: {alpr_df.shape[0]}")
+    st.sidebar.write("ALPR first 3 rows:", alpr_df.head(3))
+    st.sidebar.write("ALPR last 3 rows:", alpr_df.tail(3))
 audio_df = pd.read_csv(audio_file) if audio_file else None
-import pandas as pd
-
-chunks = pd.read_csv(alpr_file, chunksize=1_000_000)
-alpr_df = pd.concat(chunks, ignore_index=True)
-st.sidebar.write("Total rows after concat:", alpr_df.shape[0])
 
 
 # initialize metrics
