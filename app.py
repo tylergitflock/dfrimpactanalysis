@@ -256,13 +256,13 @@ hotspot_address = st.sidebar.text_input(
     help="e.g. “123 Main St, Anytown, USA”"
 )
 
-hotspot_coords = None
+hotspot_coords = []
 if hotspot_address:
     coords = lookup(hotspot_address)    # your existing geocode function
     if coords is None or not all(np.isfinite(coords)):
         st.sidebar.error("Unable to geocode that address.")
     else:
-        hotspot_coords = [coords]       # single-item list for haversine_min
+        hotspot_coords.append(coords)     
 
 # ─── 2) PARSE & COMPUTE ───────────────────────────────────────────────────────
 col_map = {c.lower():c for c in raw_df.columns}
