@@ -394,6 +394,22 @@ progress.progress(95)
 alpr_df  = pd.read_csv(alpr_file)  if alpr_file  else None
 audio_df = pd.read_csv(audio_file) if audio_file else None
 
+# ─── geocode Audio Hits by address if provided ────────────────────────────
+if audio_df is not None and "Address" in audio_df.columns:
+    # reuse your lookup(addr) function from the launch‐geocode block
+    coords_a = audio_df["Address"].fillna("").apply(
+        lambda a: lookup(a) if str(a).strip() else (None, None)
+    )
+    coords_df = pd.DataFrame(
+        coords_a.tolist(), columns=["Lat","Lon"], index=audio_df.index
+    )
+    audio_df[["Lat","Lon"]] = coords_df
+
+# now convert to numeric & drop any rows w/o valid coords
+audio_df["Lat"] = pd.to_numeric(audio_df["Lat"], errors="coerce")
+audio_df["Lon"] = pd.to_numeric(audio_df["Lon"], errors="coerce")
+audio_df = audio_df.dropna(subset=["Lat","Lon"])
+
 # --- ALPR metrics (new columns: D=hits, I=reason, J=lat, K=lon) ---
 alpr_sites = alpr_hits = alpr_eta = 0
 if alpr_df is not None:
