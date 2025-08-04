@@ -251,33 +251,49 @@ progress.progress(80)
 # ─── 6) Hotspot Area ──────────────────────────────────────────
 st.sidebar.header("6) Hotspot Area")
 
+# 1) Address input
 hotspot_address = st.sidebar.text_input(
     "Enter Hotspot Address (0.5 mi radius)",
     help="e.g. “123 Main St, Anytown, USA”"
 )
 
-# always start with an empty list
+# 2) Manual fallback fields (hidden if geocode succeeds)
+hotspot_lat_manual = st.sidebar.number_input(
+    "Manual Latitude (if geocoding fails)", format="%.6f"
+)
+hotspot_lon_manual = st.sidebar.number_input(
+    "Manual Longitude (if geocoding fails)", format="%.6f"
+)
+
+# always start empty
 hotspot_coords: list[tuple[float,float]] = []
 
 if hotspot_address:
-    # attempt to geocode the address
-    coords = lookup(hotspot_address)  # returns (lat,lon) or (None,None)
+    # try geocoding
+    coords = lookup(hotspot_address)  # returns (lat, lon) or (None, None)
+    valid_geo = (
+        coords is not None
+        and isinstance(coords[0], (int,float)) and np.isfinite(coords[0])
+        and isinstance(coords[1], (int,float)) and np.isfinite(coords[1])
+    )
 
-    # unpack & validate
-    if coords is None:
-        st.sidebar.error("Unable to geocode that address. Try refining it.")
+    if valid_geo:
+        # success: use the geocoded point
+        hotspot_coords = [coords]
     else:
-        lat_hs, lon_hs = coords
+        # geocoding failed: fall back to manual if provided
         if (
-            lat_hs is None
-            or lon_hs is None
-            or not (isinstance(lat_hs, (int, float)) and np.isfinite(lat_hs))
-            or not (isinstance(lon_hs, (int, float)) and np.isfinite(lon_hs))
+            isinstance(hotspot_lat_manual, float)
+            and isinstance(hotspot_lon_manual, float)
+            and np.isfinite(hotspot_lat_manual)
+            and np.isfinite(hotspot_lon_manual)
         ):
-            st.sidebar.error("Geocoding returned invalid coordinates.")
+            hotspot_coords = [(hotspot_lat_manual, hotspot_lon_manual)]
         else:
-            # success!
-            hotspot_coords = [(lat_hs, lon_hs)]
+            st.sidebar.error(
+                "Could not geocode that address. "
+                "Please refine the address or enter lat/lon manually."
+            )
 
 # ─── 2) PARSE & COMPUTE ───────────────────────────────────────────────────────
 col_map = {c.lower():c for c in raw_df.columns}
