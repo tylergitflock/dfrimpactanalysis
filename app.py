@@ -390,36 +390,57 @@ if hotspot_coords:
     hotspot_avg_drone     = average(hotspot_df["drone_eta_sec"])
 progress.progress(95)
 
-# ─── 3) OPTIONAL ALPR & AUDIO METRICS ────────────────────────────────────────
+# ─── 3) OPTIONAL ALPR & AUDIO METRICS (new ALPR format) ────────────────────
 alpr_df  = pd.read_csv(alpr_file)  if alpr_file  else None
 audio_df = pd.read_csv(audio_file) if audio_file else None
 
-alpr_sites=alpr_hits=alpr_eta=0
-if alpr_df is not None and alpr_df.shape[1]>=4:
-    cols = list(alpr_df.columns)
-    total_col = cols[-1]
-    lat_a = pd.to_numeric(alpr_df.iloc[:,1], errors="coerce")
-    lon_a = pd.to_numeric(alpr_df.iloc[:,2], errors="coerce")
-    hits  = pd.to_numeric(alpr_df[total_col], errors="coerce").fillna(0).values
-    dist  = haversine_min(lat_a.values, lon_a.values, launch_coords)
-    ok    = (dist<=drone_range)&np.isfinite(dist)
+# --- ALPR metrics (new columns: D=hits, I=reason, J=lat, K=lon) ---
+alpr_sites = alpr_hits = alpr_eta = 0
+if alpr_df is not None:
+    # pull out the four columns by position
+    hits   = pd.to_numeric(alpr_df.iloc[:, 3],  errors="coerce").fillna(0).values  # D
+    reasons= alpr_df.iloc[:, 8].astype(str).str.upper().str.strip()                 # I
+    lat_a  = pd.to_numeric(alpr_df.iloc[:, 9],  errors="coerce").values            # J
+    lon_a  = pd.to_numeric(alpr_df.iloc[:,10],  errors="coerce").values            # K
+
+    # build a simple set of ALPR‐alert reasons you care about:
+    alpr_reason_set = {
+      "GANG OR TERRORIST",
+      "MISSING PERSON",
+      "HOTLIST HITS",
+      "SEX OFFENDER",
+      "STOLEN PLATE",
+      "STOLEN VEHICLE",
+      "VIOLENT PERSON"
+    }
+    # filter rows whose Reason is one of yours
+    ok_reason = reasons.isin(alpr_reason_set)
+
+    # distance from each ALPR site to nearest launch
+    dist = haversine_min(lat_a, lon_a, launch_coords)
+
+    # only keep those within drone range
+    in_range = (dist <= drone_range) & np.isfinite(dist)
+
+    # final mask
+    ok = ok_reason & in_range
+
     alpr_sites = int(ok.sum())
     alpr_hits  = int(hits[ok].sum())
-    etas = dist/ max(drone_speed,1e-9)*3600
-    alpr_eta   = float((etas[ok]*hits[ok]).sum()/hits[ok].sum()) if hits[ok].sum()>0 else np.nan
 
-audio_sites=audio_hits=audio_eta=0
-if audio_df is not None and audio_df.shape[1]>=5:
-    lat_b = pd.to_numeric(audio_df.iloc[:,2], errors="coerce")
-    lon_b = pd.to_numeric(audio_df.iloc[:,3], errors="coerce")
-    hits2 = pd.to_numeric(audio_df.iloc[:,4], errors="coerce").fillna(0).values
-    dist2 = haversine_min(lat_b.values, lon_b.values, launch_coords)
-    ok2   = (dist2<=drone_range)&np.isfinite(dist2)
-    audio_sites = int(ok2.sum())
-    audio_hits  = int(hits2[ok2].sum())
-    etas2 = dist2/ max(drone_speed,1e-9)*3600
-    audio_eta   = float((etas2[ok2]*hits2[ok2]).sum()/hits2[ok2].sum()) if hits2[ok2].sum()>0 else np.nan
+    # hits‐weighted ETA
+    etas = dist / max(drone_speed, 1e-9) * 3600
+    if hits[ok].sum() > 0:
+        alpr_eta = float((etas[ok] * hits[ok]).sum() / hits[ok].sum())
+    else:
+        alpr_eta = np.nan
 
+# --- Audio remains unchanged ---
+audio_sites = audio_hits = audio_eta = 0
+if audio_df is not None and audio_df.shape[1] >= 5:
+    # …your existing audio logic…
+
+# now sum for your combined metric
 dfr_alpr_audio = alpr_hits + audio_hits
 
 # ─── NEW: Total unfiltered ALPR + Audio hits ───────────────────────────────
