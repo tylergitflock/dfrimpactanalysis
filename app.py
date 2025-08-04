@@ -414,7 +414,7 @@ if hotspot_coords:
     )
     # restrict to the DFR-only calls (or whichever set you prefer)
     mask = (
-        (all_hot_dists <= 0.5)
+        (all_hot_dists <= 50)
         & df_all["patrol_sec"].gt(0)
         & df_all["call_type_up"].isin(dfr_map)
     )
