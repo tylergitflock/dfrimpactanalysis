@@ -442,9 +442,20 @@ if alpr_df is not None:
 # --- Audio metrics remain unchanged ---
 audio_sites = audio_hits = audio_eta = 0
 if audio_df is not None and audio_df.shape[1] >= 5:
-    # …your existing audio logic here…
+    lat_b  = pd.to_numeric(audio_df.iloc[:,2], errors="coerce")
+    lon_b  = pd.to_numeric(audio_df.iloc[:,3], errors="coerce")
+    hits2  = pd.to_numeric(audio_df.iloc[:,4], errors="coerce").fillna(0).values
+    dist2  = haversine_min(lat_b.values, lon_b.values, launch_coords)
+    ok2    = (dist2 <= drone_range) & np.isfinite(dist2)
+    audio_sites = int(ok2.sum())
+    audio_hits  = int(hits2[ok2].sum())
+    etas2 = dist2 / max(drone_speed, 1e-9) * 3600
+    if hits2[ok2].sum() > 0:
+        audio_eta = float((etas2[ok2] * hits2[ok2]).sum() / hits2[ok2].sum())
+    else:
+        audio_eta = np.nan
 
-# now combine for your overall DFR+ALPR+Audio metric
+# combine for your overall “DFR + ALPR + Audio” metric
 dfr_alpr_audio = alpr_hits + audio_hits
 
 # ─── NEW: Total unfiltered ALPR + Audio hits ───────────────────────────────
