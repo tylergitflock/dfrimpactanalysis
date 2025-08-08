@@ -323,6 +323,32 @@ valid = (
   &  create_dt.notna()
 )
 
+# --- DEBUG: CFS filtering audit ---
+total_raw = len(raw_df)
+
+m_missing_times   = create_dt.isna() | dispatch_dt.isna() | arrive_dt.isna()
+m_no_real_dispatch = ~(dispatch_dt > create_dt)
+m_arrive_before_dispatch = ~(arrive_dt > dispatch_dt)
+m_negative_or_zero = ~(arrive_dt > create_dt)
+m_too_fast = (response_sec <= 5)
+
+m_valid = (
+    (dispatch_dt  > create_dt) &
+    (arrive_dt    > dispatch_dt) &
+    (arrive_dt    > create_dt) &
+    (response_sec > 5) &
+    ~m_missing_times
+)
+
+st.sidebar.subheader("CFS filtering audit")
+st.sidebar.write(f"Raw rows: {total_raw:,}")
+st.sidebar.write(f"Missing timestamps: {int(m_missing_times.sum()):,}")
+st.sidebar.write(f"Dispatch not after create: {int(m_no_real_dispatch.sum()):,}")
+st.sidebar.write(f"Arrive not after dispatch: {int(m_arrive_before_dispatch.sum()):,}")
+st.sidebar.write(f"Arrive not after create: {int(m_negative_or_zero.sum()):,}")
+st.sidebar.write(f"Response ≤ 5s: {int(m_too_fast.sum()):,}")
+st.sidebar.write(f"Rows passing validity: {int(m_valid.sum()):,}")
+
 # — filter down your DataFrame & all series
 raw_df      = raw_df.loc[valid].copy()
 create_dt   = create_dt[valid]
