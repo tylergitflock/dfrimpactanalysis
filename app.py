@@ -496,69 +496,77 @@ if alpr_df is not None:
     else:
         alpr_eta = np.nan
 # ─ end ALPR metrics ─
-# --- Audio metrics (stats only for in-range; heatmap still uses all points) ---
-if audio_df is not None:
-    lat_b      = pd.to_numeric(audio_df["Hit Latitude"], errors="coerce")
-    lon_b      = pd.to_numeric(audio_df["Hit Longitude"], errors="coerce")
-    addresses  = audio_df["Address"].astype(str).str.strip()
 
-    valid_idx  = lat_b.notna() & lon_b.notna()
-    lat_v      = lat_b[valid_idx]
-    lon_v      = lon_b[valid_idx]
-    addr_v     = addresses[valid_idx]
+# --- Audio metrics (stats only for in-range; heatmap uses ALL valid points) ---
+audio_sites = audio_hits = audio_eta = 0
+audio_pts   = None
 
-    dist2      = haversine_min(lat_v.values, lon_v.values, launch_coords)
-    in_range2  = dist2 <= drone_range
+if audio_df is not None and not audio_df.empty:
+    # Flexible column picking (case/space-insensitive)
+    def pick_col(df, names):
+        colmap = {c.lower().strip(): c for c in df.columns}
+        for n in names:
+            if n.lower().strip() in colmap:
+                return colmap[n.lower().strip()]
+        return None
 
-    # unique-address count only in-range
-    audio_sites = int(addr_v[in_range2].nunique())
+    # Expected headers (with tolerant fallbacks)
+    addr_col = pick_col(audio_df, ["Address", "Site", "Location"])
+    lat_col  = pick_col(audio_df, ["Hit Latitude", "Latitude", "Lat"])
+    lon_col  = pick_col(audio_df, ["Hit Longitude", "Longitude", "Lon", "Long", "Lng"])
+    cnt_col  = pick_col(audio_df, ["Number of hits", "Count", "Count of Audio Hit Id", "Hits", "Hit_Count"])
 
-    # total hits only in-range
-    if "Count of Audio Hit Id" in audio_df.columns:
-        counts = pd.to_numeric(audio_df.loc[valid_idx, "Count of Audio Hit Id"], errors="coerce").fillna(0)
-        audio_hits = int(counts[in_range2].sum())
-        weights    = counts.astype(int)
+    # Hard-fail if we’re missing required columns
+    missing = []
+    if addr_col is None: missing.append("Address")
+    if lat_col  is None: missing.append("Hit Latitude")
+    if lon_col  is None: missing.append("Hit Longitude")
+    if cnt_col  is None: missing.append("Number of hits")
+    if missing:
+        st.sidebar.error("Audio CSV is missing required column(s): " + ", ".join(missing))
     else:
-        audio_hits = int(in_range2.sum())
-        weights    = np.ones_like(dist2, dtype=int)
+        # Parse columns
+        addr  = audio_df[addr_col].astype(str).str.strip()
+        lat_b = pd.to_numeric(audio_df[lat_col], errors="coerce")
+        lon_b = pd.to_numeric(audio_df[lon_col], errors="coerce")
+        hits  = pd.to_numeric(audio_df[cnt_col], errors="coerce").fillna(0)
 
-    # hits-weighted average ETA
-    etas       = dist2 / max(drone_speed, 1e-9) * 3600
-    w_sum      = weights[in_range2].sum()
-    audio_eta  = float((etas[in_range2] * weights[in_range2]).sum() / w_sum) if w_sum > 0 else np.nan
+        # Valid rows must have coords
+        valid = lat_b.notna() & lon_b.notna()
+        addr_v = addr[valid]
+        lat_v  = lat_b[valid]
+        lon_v  = lon_b[valid]
+        hits_v = hits[valid]
 
-    # heatmap data stays ALL valid points
-    audio_pts = pd.DataFrame({
-        "lat":     lat_v.values,
-        "lon":     lon_v.values,
-        "address": addr_v.values
-    })
+        # Distances to nearest launch + in-range mask (stats use in-range only)
+        dist2   = haversine_min(lat_v.values, lon_v.values, launch_coords)
+        in_rng2 = (dist2 <= drone_range) & np.isfinite(dist2)
 
-# combine for your overall “DFR + ALPR + Audio” metric
-dfr_alpr_audio = alpr_hits + audio_hits
+        # ── METRICS (IN-RANGE) ───────────────────────────────────────────────
+        # 1) Unique audio locations (addresses) in range
+        audio_sites = int(addr_v[in_rng2].nunique())
 
-# ─── NEW: Total unfiltered ALPR + Audio hits ───────────────────────────────
-total_alpr_hits  = 0
-total_audio_hits = 0
+        # 2) Total hits in range
+        audio_hits = int(hits_v[in_rng2].sum())
 
-if alpr_df is not None:
-    lat_valid      = pd.to_numeric(alpr_df.iloc[:, 9], errors="coerce").notna()
-    hits_raw       = pd.to_numeric(alpr_df.iloc[:, 3], errors="coerce").fillna(0)
-    total_alpr_hits = int(hits_raw[lat_valid].sum())
+        # 3) Hits-weighted average ETA in range
+        etas_sec = dist2 / max(drone_speed, 1e-9) * 3600  # seconds
+        w_sum    = hits_v[in_rng2].sum()
+        audio_eta = float((etas_sec[in_rng2] * hits_v[in_rng2]).sum() / w_sum) if w_sum > 0 else np.nan
 
-if audio_df is not None:
-    if "Count of Audio Hit Id" in audio_df.columns:
-        total_audio_hits = int(
-            pd.to_numeric(audio_df["Count of Audio Hit Id"], errors="coerce").fillna(0).sum()
-        )
-    else:
-        total_audio_hits = len(audio_df)
+        # ── DEBUG: total unfiltered hits (all valid rows, regardless of range) ─
+        total_audio_hits = int(hits_v.sum())
+        st.sidebar.write(f"Total unfiltered Audio hits: {total_audio_hits:,}")
 
-total_alpr_audio = total_alpr_hits + total_audio_hits
-
-# debug
-st.sidebar.write(f"Total unfiltered ALPR hits: {total_alpr_hits}")
-st.sidebar.write(f"Total unfiltered Audio hits: {total_audio_hits}")
+        # ── HEATMAP DATA = ALL VALID POINTS (not only in-range) ───────────────
+        audio_pts = pd.DataFrame({
+            "lat":   lat_v.values,
+            "lon":   lon_v.values,
+            "count": hits_v.values,   # optional intensity for HeatMap
+        })
+else:
+    # keep previous total display consistent even when no file
+    st.sidebar.write("Total unfiltered Audio hits: 0")
 
 # ─── 4) METRICS & REPORT ─────────────────────────────────────────────────────
 total_cfs   = raw_count
