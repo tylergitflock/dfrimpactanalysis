@@ -91,9 +91,36 @@ def _read_bytes(path):
     with open(path, "rb") as f:
         return BytesIO(f.read())
 
-REPLAY = st.session_state.get("replay_dir")
-replay_cfg = st.session_state.get("replay_config", {})
-replay_inputs = {}
+# --- Load saved input files when replaying ---
+def _read_bytes(path):
+    with open(path, "rb") as f:
+        return BytesIO(f.read())
+
+if REPLAY:
+    inp_dir = os.path.join(REPLAY, "inputs")
+
+    def maybe(fname):
+        p = os.path.join(inp_dir, fname)
+        return _read_bytes(p) if os.path.exists(p) else None
+
+    # These names must match what save_run() wrote
+    replay_inputs = {
+        "raw":    maybe("raw_calls.csv"),
+        "agency": maybe("agency_call_types.csv"),
+        "launch": maybe("launch_locations.csv"),
+        "alpr":   maybe("alpr.csv"),
+        "audio":  maybe("audio.csv"),
+    }
+
+    # Quick debug so you can see what's loaded
+    st.sidebar.caption(f"Replay inputs loaded: " +
+                       str({k: (v is not None) for k, v in replay_inputs.items()}))
+
+# Optional quick exit from replay mode
+if REPLAY and st.sidebar.button("⬅️ Back to Start"):
+    for k in ("replay_dir", "replay_config", "viewing_saved"):
+        st.session_state.pop(k, None)
+    st.rerun()
 
 # === QUICK VIEW OF A SAVED RUN (no re-run) ==============================
 if st.session_state.get("viewing_saved") and st.session_state.get("loaded_run_dir"):
@@ -162,6 +189,9 @@ if REPLAY and st.sidebar.button("⬅️ Back to Start"):
 
 # ─── Page Setup ───────────────────────────────────────────────────────────────
 st.set_page_config(page_title="DFR Impact Analysis", layout="wide")
+# Show a banner when replaying a saved run
+if st.session_state.get("replay_dir"):
+    st.info(f"Replaying saved run from: {st.session_state['replay_dir']}")
 
 # ─── Detect available data‐editor API ─────────────────────────────────────────
 if hasattr(st, "data_editor"):
