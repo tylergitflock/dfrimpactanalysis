@@ -120,14 +120,20 @@ if REPLAY:
         return _read_bytes(path) if os.path.exists(path) else None
 
     # These filenames must match what you save in save_run(...)
-  replay_inputs = {
-    "raw":    maybe(os.path.join(inp_dir, "raw_calls.csv")),
-    "agency": maybe(os.path.join(inp_dir, "agency_call_types.csv")),
-    "launch": maybe(os.path.join(inp_dir, "launch_locations.csv")),  # match saved name
-    "alpr":   maybe(os.path.join(inp_dir, "alpr.csv")),
-    "audio":  maybe(os.path.join(inp_dir, "audio.csv")),
-}
+replay_inputs = {}
+if REPLAY:
+    inp_dir = os.path.join(REPLAY, "inputs")
 
+    def maybe(path):
+        return _read_bytes(path) if os.path.exists(path) else None
+
+    replay_inputs = {
+        "raw":    maybe(os.path.join(inp_dir, "raw_calls.csv")),
+        "agency": maybe(os.path.join(inp_dir, "agency_call_types.csv")),
+        "launch": maybe(os.path.join(inp_dir, "launch_locations.csv")),
+        "alpr":   maybe(os.path.join(inp_dir, "alpr.csv")),
+        "audio":  maybe(os.path.join(inp_dir, "audio.csv")),
+    }
 # Optional quick exit from replay mode
 if REPLAY and st.sidebar.button("⬅️ Back to Start"):
     for k in ("replay_dir", "replay_config", "viewing_saved"):
@@ -246,52 +252,54 @@ if mode == "Open past report":
         except Exception:
             pass
 
-    # Safe fallbacks
-    agency_name = cfg.get("agency_name", r["agency"])
-    run_by      = cfg.get("analyst_name", "Unknown")
+# Safe fallbacks
+agency_name = cfg.get("agency_name", r["agency"])
+run_by      = cfg.get("analyst_name", "Unknown")
 
-    # Prefer saved local time (if present), else fall back to folder stamp
-    if cfg.get("run_time_iso_local"):
-        try:
-            dt_local = datetime.fromisoformat(cfg["run_time_iso_local"])
-            when_str = dt_local.strftime("%b %d, %Y — %I:%M %p")
-            tz_short = cfg.get("run_timezone", "")
-            if tz_short:
-                when_str += f" {tz_short}"
-        except Exception:
-            try:
-                run_dt = datetime.strptime(r["stamp"], "%Y%m%d-%H%M%S")
-                when_str = run_dt.strftime("%b %d, %Y — %I:%M %p")
-            except Exception:
-                when_str = r["stamp"]
-    else:
+# Prefer saved local time (if present), else fall back to folder stamp
+if cfg.get("run_time_iso_local"):
+    try:
+        dt_local = datetime.fromisoformat(cfg["run_time_iso_local"])
+        when_str = dt_local.strftime("%b %d, %Y — %I:%M %p")
+        tz_short = cfg.get("run_timezone", "")
+        if tz_short:
+            when_str += f" {tz_short}"
+    except Exception:
         try:
             run_dt = datetime.strptime(r["stamp"], "%Y%m%d-%H%M%S")
             when_str = run_dt.strftime("%b %d, %Y — %I:%M %p")
         except Exception:
             when_str = r["stamp"]
+else:
+    try:
+        run_dt = datetime.strptime(r["stamp"], "%Y%m%d-%H%M%S")
+        when_str = run_dt.strftime("%b %d, %Y — %I:%M %p")
+    except Exception:
+        when_str = r["stamp"]
 
-        c1, c2, c3 = st.columns(3)
-    c1.metric("Agency", agency_name)
-    c2.metric("Run by", run_by)
-    c3.metric("When", when_str)
+# Display metrics for this run
+c1, c2, c3 = st.columns(3)
+c1.metric("Agency", agency_name)
+c2.metric("Run by", run_by)
+c3.metric("When", when_str)
 
-    c1b, c2b = st.columns(2)
-    view_btn  = c1b.button("View saved metrics (no re-run)")
-    rerun_btn = c2b.button("Re-run this report with stored inputs", type="primary")
+# Action buttons
+c1b, c2b = st.columns(2)
+view_btn  = c1b.button("View saved metrics (no re-run)")
+rerun_btn = c2b.button("Re-run this report with stored inputs", type="primary")
 
-    if view_btn:
-        st.session_state["viewing_saved"] = True
-        st.session_state["loaded_run_dir"] = r["path"]
-        st.session_state["loaded_config"]  = cfg
-        st.rerun()
+if view_btn:
+    st.session_state["viewing_saved"] = True
+    st.session_state["loaded_run_dir"] = r["path"]
+    st.session_state["loaded_config"]  = cfg
+    st.rerun()
 
-    if rerun_btn:
-        st.session_state["replay_dir"]    = r["path"]
-        st.session_state["replay_config"] = cfg
-        st.session_state.pop("viewing_saved", None)
-        st.success("Replaying this run with the saved CSVs and current code…")
-        st.rerun()
+if rerun_btn:
+    st.session_state["replay_dir"]    = r["path"]
+    st.session_state["replay_config"] = cfg
+    st.session_state.pop("viewing_saved", None)
+    st.success("Replaying this run with the saved CSVs and current code…")
+    st.rerun()
 
 # ─── 0) PROGRESS BAR ──────────────────────────────────────────────────────────
 progress = st.sidebar.progress(0)
@@ -952,12 +960,13 @@ try:
     }
 
     # Package the uploaded files so they’re saved alongside the run
-    input_files_dict = {
-        (raw_file.name if raw_file else "raw_calls.csv"): raw_file,
-        (ag_file.name if ag_file else "agency_call_types.csv"): ag_file,
-        (alpr_file.name if alpr_file else "alpr.csv"): alpr_file,
-        (audio_file.name if audio_file else "audio.csv"): audio_file,
-    }
+   input_files_dict = {
+    "raw_calls.csv":          raw_file,
+    "agency_call_types.csv":  ag_file,
+    "launch_locations.csv":   launch_file if 'launch_file' in locals() else None,
+    "alpr.csv":               alpr_file,
+    "audio.csv":              audio_file,
+}
 
     run_dir = save_run(
         agency_name or "unknown_agency",
