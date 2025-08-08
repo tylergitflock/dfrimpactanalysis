@@ -3,8 +3,9 @@ import os
 import json
 import time
 import uuid
+import tempfile
+from io import BytesIO
 from datetime import datetime, timezone
-from tzlocal import get_localzone
 
 import numpy as np
 import pandas as pd
@@ -13,48 +14,59 @@ from streamlit_folium import st_folium
 import folium
 from folium.plugins import HeatMap
 import math
-import tempfile
-from io import BytesIO
 
-# ─── Past Runs & Helpers ─────────────────────────────────────────────────────
-import os
-import json
-from datetime import datetime
-import math
-import numpy as np
-import pandas as pd
-import streamlit as st
+# Optional: tz for local timestamps (comment out if unavailable)
+try:
+    from tzlocal import get_localzone
+except Exception:
+    get_localzone = None
 
 # Writable default; can be overridden with env var RUNS_DIR
 BASE_DIR = os.environ.get("RUNS_DIR", os.path.join(tempfile.gettempdir(), "dfr_runs"))
 os.makedirs(BASE_DIR, exist_ok=True)
 
-# --- Save a run (REPLACE your existing save_run with this) ---
-def save_run(agency_slug, config_dict, metrics_dict, input_files_dict,
-             map_images=None, pdf_bytes=None):
-    # Attach local timestamp + timezone so the landing page can show “user local time”
-    try:
-        local_tz = get_localzone()
-        now_local = datetime.now(local_tz)
-        config_dict["run_time_iso_local"] = now_local.isoformat()
-        config_dict["run_timezone"] = str(local_tz)
-    except Exception:
-        pass  # if tz lookup fails, we still save the run
+def slugify(name: str) -> str:
+    return "".join(c.lower() if c.isalnum() else "_" for c in (name or "")).strip("_") or "unknown_agency"
 
-    # Folder name stamp (UTC-naive is fine; we display local from config above)
+def list_runs():
+    rows = []
+    if not os.path.isdir(BASE_DIR): 
+        return rows
+    for agency in sorted(os.listdir(BASE_DIR)):
+        apath = os.path.join(BASE_DIR, agency)
+        if not os.path.isdir(apath): 
+            continue
+        for stamp in sorted(os.listdir(apath), reverse=True):
+            rpath = os.path.join(apath, stamp)
+            if os.path.isdir(rpath):
+                rows.append({"agency": agency, "stamp": stamp, "path": rpath})
+    return rows
+
+def save_run(agency_name, config_dict, metrics_dict, input_files_dict,
+             map_images=None, pdf_bytes=None):
+    # Attach local timestamp + timezone if tzlocal is available
+    try:
+        if get_localzone is not None:
+            local_tz = get_localzone()
+            now_local = datetime.now(local_tz)
+            config_dict["run_time_iso_local"] = now_local.isoformat()
+            config_dict["run_timezone"] = str(local_tz)
+    except Exception:
+        # non-fatal
+        pass
+
+    agency_slug = slugify(agency_name)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     rdir = os.path.join(BASE_DIR, agency_slug, stamp)
 
     os.makedirs(os.path.join(rdir, "inputs"), exist_ok=True)
     os.makedirs(os.path.join(rdir, "maps"), exist_ok=True)
 
-    # Save config + metrics
     with open(os.path.join(rdir, "config.json"), "w") as f:
         json.dump(config_dict, f, indent=2)
     with open(os.path.join(rdir, "metrics.json"), "w") as f:
         json.dump(metrics_dict, f, indent=2)
 
-    # Save original inputs
     for name, fobj in (input_files_dict or {}).items():
         if fobj is not None:
             try:
@@ -64,13 +76,11 @@ def save_run(agency_slug, config_dict, metrics_dict, input_files_dict,
             with open(os.path.join(rdir, "inputs", name), "wb") as out:
                 out.write(fobj.read())
 
-    # Save any generated map images
     if map_images:
         for name, png_bytes in map_images.items():
             with open(os.path.join(rdir, "maps", name), "wb") as out:
                 out.write(png_bytes)
 
-    # Save PDF if present
     if pdf_bytes:
         with open(os.path.join(rdir, "report.pdf"), "wb") as out:
             out.write(pdf_bytes)
@@ -96,34 +106,6 @@ def list_runs():
                 rows.append({"agency": agency, "stamp": stamp, "path": rpath})
     return rows
 
-def save_run(agency_name, config_dict, metrics_dict, input_files_dict,
-             map_images=None, pdf_bytes=None):
-    """Save a completed run with config, metrics, inputs, and optional maps/PDF."""
-    agency_slug = slugify(agency_name)
-    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    rdir = os.path.join(BASE_DIR, agency_slug, stamp)
-    os.makedirs(os.path.join(rdir, "inputs"), exist_ok=True)
-    os.makedirs(os.path.join(rdir, "maps"), exist_ok=True)
-
-    with open(os.path.join(rdir, "config.json"), "w") as f:
-        json.dump(config_dict, f, indent=2)
-    with open(os.path.join(rdir, "metrics.json"), "w") as f:
-        json.dump(metrics_dict, f, indent=2)
-
-    for name, fobj in input_files_dict.items():
-        if fobj is not None:
-            fobj.seek(0)
-            open(os.path.join(rdir, "inputs", name), "wb").write(fobj.read())
-
-    if map_images:
-        for name, png_bytes in map_images.items():
-            open(os.path.join(rdir, "maps", name), "wb").write(png_bytes)
-
-    if pdf_bytes:
-        open(os.path.join(rdir, "report.pdf"), "wb").write(pdf_bytes)
-
-    return rdir
-
 def _read_bytes(path):
     with open(path, "rb") as f:
         return BytesIO(f.read())
@@ -138,13 +120,13 @@ if REPLAY:
         return _read_bytes(path) if os.path.exists(path) else None
 
     # These filenames must match what you save in save_run(...)
-    replay_inputs = {
-        "raw":    maybe(os.path.join(inp_dir, "raw_calls.csv")),
-        "agency": maybe(os.path.join(inp_dir, "agency_call_types.csv")),
-        "launch": maybe(os.path.join(inp_dir, "launch_sites.csv")),
-        "alpr":   maybe(os.path.join(inp_dir, "alpr.csv")),
-        "audio":  maybe(os.path.join(inp_dir, "audio.csv")),
-    }
+  replay_inputs = {
+    "raw":    maybe(os.path.join(inp_dir, "raw_calls.csv")),
+    "agency": maybe(os.path.join(inp_dir, "agency_call_types.csv")),
+    "launch": maybe(os.path.join(inp_dir, "launch_locations.csv")),  # match saved name
+    "alpr":   maybe(os.path.join(inp_dir, "alpr.csv")),
+    "audio":  maybe(os.path.join(inp_dir, "audio.csv")),
+}
 
 # Optional quick exit from replay mode
 if REPLAY and st.sidebar.button("⬅️ Back to Start"):
@@ -289,27 +271,27 @@ if mode == "Open past report":
         except Exception:
             when_str = r["stamp"]
 
-    c1, c2, c3 = st.columns(3)
+        c1, c2, c3 = st.columns(3)
     c1.metric("Agency", agency_name)
     c2.metric("Run by", run_by)
     c3.metric("When", when_str)
 
-   c1b, c2b = st.columns(2)
-view_btn  = c1b.button("View saved metrics (no re-run)")
-rerun_btn = c2b.button("Re-run this report with stored inputs", type="primary")
+    c1b, c2b = st.columns(2)
+    view_btn  = c1b.button("View saved metrics (no re-run)")
+    rerun_btn = c2b.button("Re-run this report with stored inputs", type="primary")
 
-if view_btn:
-    st.session_state["viewing_saved"] = True
-    st.session_state["loaded_run_dir"] = r["path"]
-    st.session_state["loaded_config"]  = cfg
-    st.rerun()
+    if view_btn:
+        st.session_state["viewing_saved"] = True
+        st.session_state["loaded_run_dir"] = r["path"]
+        st.session_state["loaded_config"]  = cfg
+        st.rerun()
 
-if rerun_btn:
-    st.session_state["replay_dir"]    = r["path"]
-    st.session_state["replay_config"] = cfg   # assumptions, names, etc.
-    st.session_state.pop("viewing_saved", None)
-    st.success("Replaying this run with the saved CSVs and current code…")
-    st.rerun()
+    if rerun_btn:
+        st.session_state["replay_dir"]    = r["path"]
+        st.session_state["replay_config"] = cfg
+        st.session_state.pop("viewing_saved", None)
+        st.success("Replaying this run with the saved CSVs and current code…")
+        st.rerun()
 
 # ─── 0) PROGRESS BAR ──────────────────────────────────────────────────────────
 progress = st.sidebar.progress(0)
@@ -901,69 +883,7 @@ report_df = pd.DataFrame({
 st.subheader("Report Values")
 st.dataframe(report_df, use_container_width=True)
 
-# === Auto-save this run (after metrics are computed) =========================
-try:
-    # Bundle the key metrics you want to see on the landing page / reuse later
-    metrics_dict = {
-        "total_cfs": int(total_cfs),
-        "total_alpr_audio_hits_citywide": int(total_alpr_audio) if 'total_alpr_audio' in locals() else None,
-        "dfr_responses_within_range": int(in_count),
-        "dfr_responses_to_alpr_audio_in_range": int(dfr_alpr_audio),
-        "avg_drone_eta_sec": float(avg_drone) if np.isfinite(avg_drone) else None,
-        "first_on_scene_pct": float(first_on_pct) if np.isfinite(first_on_pct) else None,
-        "expected_cfs_cleared": int(exp_cleared),
-        "officers_fte": float(officers) if np.isfinite(officers) else None,
-        "roi_usd": float(roi) if np.isfinite(roi) else None,
-        "total_dfr_calls": int(total_dfr),
-        "avg_patrol_sec_dfr": float(avg_patrol) if np.isfinite(avg_patrol) else None,
-        "avg_onscene_sec_dfr": float(avg_scene) if np.isfinite(avg_scene) else None,
-        "avg_patrol_sec_inrange": float(avg_in) if np.isfinite(avg_in) else None,
-        "p1_count_inrange": int(p1_count),
-        "avg_p1_patrol_sec_inrange": float(avg_p1_pat) if np.isfinite(avg_p1_pat) else None,
-        "avg_p1_drone_eta_sec_inrange": float(avg_p1_drone) if np.isfinite(avg_p1_drone) else None,
-        "hotspot_count": int(hotspot_count),
-        "hotspot_avg_patrol_sec": float(hotspot_avg_patrol) if np.isfinite(hotspot_avg_patrol) else None,
-        "hotspot_avg_drone_eta_sec": float(hotspot_avg_drone) if np.isfinite(hotspot_avg_drone) else None,
-        "alpr_sites_inrange": int(alpr_sites),
-        "alpr_hits_inrange_reason_filtered": int(alpr_hits),
-        "alpr_eta_sec": float(alpr_eta) if np.isfinite(alpr_eta) else None,
-        "audio_sites_inrange": int(audio_sites),
-        "audio_hits_inrange": int(audio_hits),
-        "audio_eta_sec": float(audio_eta) if np.isfinite(audio_eta) else None,
-        "clearable_inrange": int(clr_count),
-        "avg_clearable_onscene_sec": float(avg_clr) if np.isfinite(avg_clr) else None,
-    }
 
-    # Inputs we’ll save a copy of (so a past run can be replayed)
-    input_files_dict = {
-        "raw_calls.csv": raw_file,
-        "agency_call_types.csv": ag_file,
-        # launch_file may not exist if you used the inline editor — skip if None
-        "launch_locations.csv": launch_file if 'launch_file' in locals() else None,
-        "alpr.csv": alpr_file,
-        "audio.csv": audio_file,
-    }
-    # Rewind streams so save_run can read them from the start
-    for _f in list(input_files_dict.values()):
-        if _f is not None and hasattr(_f, "seek"):
-            try: _f.seek(0)
-            except Exception: pass
-
-    run_dir = save_run(
-        agency_name or "unknown_agency",
-        config_dict=config_dict,         # you already build this earlier
-        metrics_dict=metrics_dict,
-        input_files_dict=input_files_dict,
-        map_images=None,                 # hook up later if you snapshot maps
-        pdf_bytes=None                   # hook PDF generator here later
-    )
-
-    st.sidebar.success(f"📦 Run saved: {run_dir}")
-    st.session_state["last_run_dir"] = run_dir
-
-except Exception as e:
-    st.sidebar.warning(f"Couldn’t auto-save this run: {e}")
-# ============================================================================
 
 # ─── Auto-save this run ──────────────────────────────────────────────────────
 try:
