@@ -13,62 +13,68 @@ import folium
 from folium.plugins import HeatMap
 import math
 
-# --- Past runs landing page setup ---
-BASE_DIR = "/mnt/data/runs"  # swap to S3 or other path later
+# ─── Past Runs & Helpers ─────────────────────────────────────────────────────
+import os
+import json
+from datetime import datetime
+import math
+import numpy as np
+import pandas as pd
+import streamlit as st
+
+BASE_DIR = "/mnt/data/runs"  # later can swap to S3, DB, etc.
+
+def slugify(name):
+    """Convert agency name to safe folder-friendly slug."""
+    return "".join(c.lower() if c.isalnum() else "_" for c in name).strip("_")
 
 def list_runs():
+    """Return a list of all past saved runs."""
     rows = []
-    if not os.path.isdir(BASE_DIR): 
+    if not os.path.isdir(BASE_DIR):
         return rows
     for agency in sorted(os.listdir(BASE_DIR)):
         apath = os.path.join(BASE_DIR, agency)
-        if not os.path.isdir(apath): continue
+        if not os.path.isdir(apath):
+            continue
         for stamp in sorted(os.listdir(apath), reverse=True):
             rpath = os.path.join(apath, stamp)
             if os.path.isdir(rpath):
                 rows.append({"agency": agency, "stamp": stamp, "path": rpath})
     return rows
 
-with st.sidebar.expander("🧭 Start", expanded=True):
-    mode = st.radio("Choose:", ["Start new report", "Open past report"])
-
-if mode == "Open past report":
-    runs = list_runs()
-    if not runs:
-        st.info("No past runs found yet.")
-    else:
-        sel = st.selectbox("Select a past run", [f"{r['agency']} / {r['stamp']}" for r in runs])
-        if sel:
-            r = runs[[f"{x['agency']} / {x['stamp']}" for x in runs].index(sel)]
-            cfg_p = os.path.join(r["path"], "config.json")
-            met_p = os.path.join(r["path"], "metrics.json")
-            st.write("**Config:**", cfg_p if os.path.exists(cfg_p) else "missing")
-            st.write("**Metrics:**", met_p if os.path.exists(met_p) else "missing")
-            st.stop()
-else:
-    pass
-
-def save_run(agency_slug, config_dict, metrics_dict, input_files_dict, map_images=None, pdf_bytes=None):
+def save_run(agency_name, config_dict, metrics_dict, input_files_dict,
+             map_images=None, pdf_bytes=None):
+    """Save a completed run with config, metrics, inputs, and optional maps/PDF."""
+    agency_slug = slugify(agency_name)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     rdir = os.path.join(BASE_DIR, agency_slug, stamp)
     os.makedirs(os.path.join(rdir, "inputs"), exist_ok=True)
     os.makedirs(os.path.join(rdir, "maps"), exist_ok=True)
-    with open(os.path.join(rdir, "config.json"), "w") as f: json.dump(config_dict, f, indent=2)
-    with open(os.path.join(rdir, "metrics.json"), "w") as f: json.dump(metrics_dict, f, indent=2)
+
+    with open(os.path.join(rdir, "config.json"), "w") as f:
+        json.dump(config_dict, f, indent=2)
+    with open(os.path.join(rdir, "metrics.json"), "w") as f:
+        json.dump(metrics_dict, f, indent=2)
+
     for name, fobj in input_files_dict.items():
         if fobj is not None:
             fobj.seek(0)
             open(os.path.join(rdir, "inputs", name), "wb").write(fobj.read())
+
     if map_images:
         for name, png_bytes in map_images.items():
             open(os.path.join(rdir, "maps", name), "wb").write(png_bytes)
+
     if pdf_bytes:
         open(os.path.join(rdir, "report.pdf"), "wb").write(pdf_bytes)
+
     return rdir
 
+# ─── Page Setup ───────────────────────────────────────────────────────────────
 st.set_page_config(page_title="DFR Impact Analysis", layout="wide")
 
-# ─── Detect available data‐editor API ────────────────────────────────────────
+# ─── Detect available data‐editor API ─────────────────────────────────────────
 if hasattr(st, "data_editor"):
     _EDITOR = st.data_editor
 elif hasattr(st, "experimental_data_editor"):
@@ -76,20 +82,15 @@ elif hasattr(st, "experimental_data_editor"):
 else:
     _EDITOR = None
 
-# ─── Helpers ─────────────────────────────────────────────────────────────────
+# ─── Helper Functions ─────────────────────────────────────────────────────────
 EPOCH_1899 = np.datetime64("1899-12-30")
 
 def parse_time_series(s: pd.Series) -> pd.Series:
-    # 1) Turn everything into strings, strip out commas (thousands separators)
     s_str = s.astype(str).str.replace(",", "")
-    # 2) Try numeric → Excel serial date
-    num   = pd.to_numeric(s_str, errors="coerce")
-    dt    = pd.to_datetime(EPOCH_1899) + pd.to_timedelta(num * 86400, unit="s")
-    # 3) If numeric failed, fall back to parsing any actual datetime text
-    txt   = pd.to_datetime(s_str.where(num.isna(), None), errors="coerce")
-    # 4) Use dt when we got a number, otherwise use txt
+    num = pd.to_numeric(s_str, errors="coerce")
+    dt = pd.to_datetime(EPOCH_1899) + pd.to_timedelta(num * 86400, unit="s")
+    txt = pd.to_datetime(s_str.where(num.isna(), None), errors="coerce")
     return dt.where(~num.isna(), txt)
-
 
 def haversine_min(lat_arr, lon_arr, launches):
     res = np.full(lat_arr.shape, np.inf)
@@ -134,17 +135,31 @@ def to_csv_bytes(df):
     return df.to_csv(index=False).encode("utf-8")
 
 def auto_heat_params(df, max_radius=50, max_blur=50):
-    """
-    Given a DataFrame of points, return a (radius, blur) pair 
-    that scales inversely with point count so sparse maps still show color.
-    """
     n = len(df)
     if n <= 1:
         return max_radius, max_blur
     base = max_radius * math.sqrt(1000 / n)
     radius = int(min(max_radius, max(5, base)))
-    blur   = int(min(max_blur, max(5, base)))
+    blur = int(min(max_blur, max(5, base)))
     return radius, blur
+
+# ─── Landing Page UI ─────────────────────────────────────────────────────────
+with st.sidebar.expander("🧭 Start", expanded=True):
+    mode = st.radio("Choose:", ["Start new report", "Open past report"])
+
+if mode == "Open past report":
+    runs = list_runs()
+    if not runs:
+        st.info("No past runs found yet.")
+    else:
+        sel = st.selectbox("Select a past run", [f"{r['agency']} / {r['stamp']}" for r in runs])
+        if sel:
+            r = runs[[f"{x['agency']} / {x['stamp']}" for x in runs].index(sel)]
+            cfg_p = os.path.join(r["path"], "config.json")
+            met_p = os.path.join(r["path"], "metrics.json")
+            st.write("**Config:**", cfg_p if os.path.exists(cfg_p) else "missing")
+            st.write("**Metrics:**", met_p if os.path.exists(met_p) else "missing")
+            st.stop()
 
 # ─── 0) PROGRESS BAR ──────────────────────────────────────────────────────────
 progress = st.sidebar.progress(0)
