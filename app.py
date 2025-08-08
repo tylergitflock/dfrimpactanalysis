@@ -323,32 +323,48 @@ valid = (
   &  create_dt.notna()
 )
 
-# --- DEBUG: CFS filtering audit ---
-total_raw = len(raw_df)
+# === Clear, non-overlapping audit of validity filters ===
+missing_ts = create_dt.isna() | dispatch_dt.isna() | arrive_dt.isna()
+bad_dispatch = dispatch_dt <= create_dt
+bad_arrive_vs_dispatch = arrive_dt <= dispatch_dt
+bad_arrive_vs_create   = arrive_dt <= create_dt
+too_fast = response_sec <= 5
 
-m_missing_times   = create_dt.isna() | dispatch_dt.isna() | arrive_dt.isna()
-m_no_real_dispatch = ~(dispatch_dt > create_dt)
-m_arrive_before_dispatch = ~(arrive_dt > dispatch_dt)
-m_negative_or_zero = ~(arrive_dt > create_dt)
-m_too_fast = (response_sec <= 5)
+fail_any = missing_ts | bad_dispatch | bad_arrive_vs_dispatch | bad_arrive_vs_create | too_fast
+pass_all = ~fail_any
 
-m_valid = (
-    (dispatch_dt  > create_dt) &
-    (arrive_dt    > dispatch_dt) &
-    (arrive_dt    > create_dt) &
-    (response_sec > 5) &
-    ~m_missing_times
-)
+# Mutually-exclusive buckets (so they add up)
+only_missing   =  missing_ts & ~(bad_dispatch | bad_arrive_vs_dispatch | bad_arrive_vs_create | too_fast)
+only_dispatch  =  bad_dispatch & ~(missing_ts | bad_arrive_vs_dispatch | bad_arrive_vs_create | too_fast)
+only_arr_vs_dis=  bad_arrive_vs_dispatch & ~(missing_ts | bad_dispatch | bad_arrive_vs_create | too_fast)
+only_arr_vs_cr =  bad_arrive_vs_create   & ~(missing_ts | bad_dispatch | bad_arrive_vs_dispatch | too_fast)
+only_fast      =  too_fast & ~(missing_ts | bad_dispatch | bad_arrive_vs_dispatch | bad_arrive_vs_create)
 
-st.sidebar.subheader("CFS filtering audit")
-st.sidebar.write(f"Raw rows: {total_raw:,}")
-st.sidebar.write(f"Missing timestamps: {int(m_missing_times.sum()):,}")
-st.sidebar.write(f"Dispatch not after create: {int(m_no_real_dispatch.sum()):,}")
-st.sidebar.write(f"Arrive not after dispatch: {int(m_arrive_before_dispatch.sum()):,}")
-st.sidebar.write(f"Arrive not after create: {int(m_negative_or_zero.sum()):,}")
-st.sidebar.write(f"Response ≤ 5s: {int(m_too_fast.sum()):,}")
-st.sidebar.write(f"Rows passing validity: {int(m_valid.sum()):,}")
+# Everything else = failed multiple rules
+multi_fail = fail_any & ~(only_missing | only_dispatch | only_arr_vs_dis | only_arr_vs_cr | only_fast)
 
+with st.sidebar.expander("CFS filtering audit", expanded=True):
+    st.write(f"Raw rows: {len(raw_df):,}")
+    st.write(f"Rows passing validity: {int(pass_all.sum()):,}")
+    st.write(f"Rows failing ANY rule: {int(fail_any.sum()):,}  "
+             f"(should equal Raw − Passing = {len(raw_df)-int(pass_all.sum()):,})")
+
+    st.markdown("**Failed exactly one rule (mutually exclusive):**")
+    st.write(f"• Missing timestamp(s): {int(only_missing.sum()):,}")
+    st.write(f"• Dispatch not after create: {int(only_dispatch.sum()):,}")
+    st.write(f"• Arrive not after dispatch: {int(only_arr_vs_dis.sum()):,}")
+    st.write(f"• Arrive not after create: {int(only_arr_vs_cr.sum()):,}")
+    st.write(f"• Response ≤ 5s: {int(only_fast.sum()):,}")
+
+    st.write(f"• Failed multiple rules (overlap): {int(multi_fail.sum()):,}")
+
+    # sanity: tiny/negative response distribution
+    small = response_sec[fail_any].dropna()
+    st.write(
+        "Tiny/negative response snapshot (seconds): "
+        f"≤0s: {(small<=0).sum():,}, 1–5s: {((small>0)&(small<=5)).sum():,}, "
+        f"median of failures: {np.nanmedian(small) if len(small)>0 else '—'}"
+    )
 # — filter down your DataFrame & all series
 raw_df      = raw_df.loc[valid].copy()
 create_dt   = create_dt[valid]
