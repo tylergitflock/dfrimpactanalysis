@@ -4,3 +4,4 @@ numpy>=1.26
 folium>=0.14
 streamlit-folium>=0.12
 geopy
+tzlocal
