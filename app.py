@@ -249,28 +249,34 @@ alpr_file  = st.sidebar.file_uploader("Upload ALPR Data CSV", type=["csv"])
 audio_file = st.sidebar.file_uploader("Upload Audio Hits CSV", type=["csv"])
 progress.progress(80)
 
-# ─── 6) Hotspot Area  (enter coordinates manually) ─────────────────────────
-st.sidebar.header("6) Hotspot Area  (manual entry)")
+# ─── 6) Hotspot Area ──────────────────────────────────────────
+st.sidebar.header("6) Hotspot Area")
 
-hotspot_lat = st.sidebar.number_input(
-    "Hotspot Latitude",  format="%.6f", value=0.0
-)
-hotspot_lon = st.sidebar.number_input(
-    "Hotspot Longitude", format="%.6f", value=0.0
+# 1) Address input
+hotspot_address = st.sidebar.text_input(
+    "Enter Hotspot Address (0.5 mi radius)",
+    help="e.g. “123 Main St, Anytown, USA”"
 )
 
-# build hotspot_coords only if both numbers are provided and finite
-hotspot_coords: list[tuple[float, float]] = []
-if (
-    hotspot_lat != 0.0 and hotspot_lon != 0.0
-    and np.isfinite(hotspot_lat) and np.isfinite(hotspot_lon)
-):
-    hotspot_coords = [(hotspot_lat, hotspot_lon)]
-else:
-    st.sidebar.info(
-        "Enter a valid latitude **and** longitude if you want the red "
-        "0.5-mile hotspot circle to appear on the maps."
+# 2) Manual fallback fields (only used if geocoding fails)
+hotspot_lat_manual = st.sidebar.number_input("Manual Latitude (if geocoding fails)",  format="%.6f")
+hotspot_lon_manual = st.sidebar.number_input("Manual Longitude (if geocoding fails)", format="%.6f")
+
+hotspot_coords: list[tuple[float,float]] = []
+if hotspot_address:
+    coords = lookup(hotspot_address)  # (lat, lon) or (None, None)
+    valid_geo = (
+        coords is not None
+        and isinstance(coords[0], (int,float)) and np.isfinite(coords[0])
+        and isinstance(coords[1], (int,float)) and np.isfinite(coords[1])
     )
+    if valid_geo:
+        hotspot_coords = [coords]
+    elif np.isfinite(hotspot_lat_manual) and np.isfinite(hotspot_lon_manual):
+        hotspot_coords = [(float(hotspot_lat_manual), float(hotspot_lon_manual))]
+    else:
+        st.sidebar.warning("Could not geocode that address. Enter lat/lon manually if needed.")
+        
 # ─── 2) PARSE & COMPUTE ───────────────────────────────────────────────────────
 col_map = {c.lower():c for c in raw_df.columns}
 def pick(*alts):
@@ -570,6 +576,31 @@ else:
 
 # combine for your overall “DFR + ALPR + Audio” metric
 dfr_alpr_audio = alpr_hits + audio_hits
+
+# --- Unfiltered totals for ALPR + Audio (for the report/debug) ---
+total_alpr_hits = 0
+if alpr_df is not None and not alpr_df.empty:
+    # treat col 1/2 as lat/lon; only count rows that look like real points
+    alpr_lat_ok = pd.to_numeric(alpr_df.iloc[:, 1], errors="coerce").notna()
+    total_alpr_hits = int(
+        pd.to_numeric(alpr_df.iloc[:, 3], errors="coerce").fillna(0)[alpr_lat_ok].sum()
+    )
+
+total_audio_hits = 0
+if audio_df is not None and not audio_df.empty:
+    # find a hits column robustly (your new export uses "Number of hits")
+    lc = {c.strip().lower(): c for c in audio_df.columns}
+    hits_col = None
+    for k in ["number of hits", "count of audio hit id", "hits", "count"]:
+        if k in lc:
+            hits_col = lc[k]; break
+    total_audio_hits = int(pd.to_numeric(audio_df[hits_col], errors="coerce").fillna(0).sum()) if hits_col else len(audio_df)
+
+total_alpr_audio = total_alpr_hits + total_audio_hits
+
+# optional sidebar debug
+st.sidebar.write(f"Total unfiltered ALPR hits: {total_alpr_hits:,}")
+st.sidebar.write(f"Total unfiltered Audio hits: {total_audio_hits:,}")
 
 # ─── 4) METRICS & REPORT ─────────────────────────────────────────────────────
 total_cfs   = raw_count
