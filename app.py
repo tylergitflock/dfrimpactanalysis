@@ -219,20 +219,21 @@ with st.sidebar.expander("🧭 Start", expanded=True):
 from datetime import datetime
 import os, json
 
+# --- Past runs selector & actions (REPLACE your current block with this) ---
 if mode == "Open past report":
     runs = list_runs()
     if not runs:
         st.info("No past runs found yet.")
         st.stop()
 
-    # Pretty labels for the dropdown
-    def _label(r):
+    # Nice labels for the dropdown
+    def _label(row):
         try:
-            dt = datetime.strptime(r["stamp"], "%Y%m%d-%H%M%S")
+            dt = datetime.strptime(row["stamp"], "%Y%m%d-%H%M%S")
             when = dt.strftime("%Y-%m-%d %H:%M:%S")
         except Exception:
-            when = r["stamp"]
-        return f"{r['agency']} / {when}"
+            when = row["stamp"]
+        return f"{row['agency']} / {when}"
 
     idx = st.selectbox(
         "Select a past run",
@@ -241,6 +242,7 @@ if mode == "Open past report":
     )
     r = runs[idx]
 
+    # Load config/metrics (config may be missing; that's fine)
     cfg_path = os.path.join(r["path"], "config.json")
     met_path = os.path.join(r["path"], "metrics.json")
 
@@ -250,56 +252,58 @@ if mode == "Open past report":
             with open(cfg_path, "r") as f:
                 cfg = json.load(f)
         except Exception:
-            pass
+            cfg = {}
 
-# Safe fallbacks
-agency_name = cfg.get("agency_name", r["agency"])
-run_by      = cfg.get("analyst_name", "Unknown")
+    # --- Safe fallbacks for the header metrics
+    agency_name = cfg.get("agency_name", r["agency"])
+    run_by      = cfg.get("analyst_name", "Unknown")
 
-# Prefer saved local time (if present), else fall back to folder stamp
-if cfg.get("run_time_iso_local"):
-    try:
-        dt_local = datetime.fromisoformat(cfg["run_time_iso_local"])
-        when_str = dt_local.strftime("%b %d, %Y — %I:%M %p")
-        tz_short = cfg.get("run_timezone", "")
-        if tz_short:
-            when_str += f" {tz_short}"
-    except Exception:
+    # Prefer saved local time (if present), else use the folder stamp
+    if cfg.get("run_time_iso_local"):
+        try:
+            dt_local = datetime.fromisoformat(cfg["run_time_iso_local"])
+            when_str = dt_local.strftime("%b %d, %Y — %I:%M %p")
+            tz_short = cfg.get("run_timezone", "")
+            if tz_short:
+                when_str += f" {tz_short}"
+        except Exception:
+            try:
+                run_dt = datetime.strptime(r["stamp"], "%Y%m%d-%H%M%S")
+                when_str = run_dt.strftime("%b %d, %Y — %I:%M %p")
+            except Exception:
+                when_str = r["stamp"]
+    else:
         try:
             run_dt = datetime.strptime(r["stamp"], "%Y%m%d-%H%M%S")
             when_str = run_dt.strftime("%b %d, %Y — %I:%M %p")
         except Exception:
             when_str = r["stamp"]
-else:
-    try:
-        run_dt = datetime.strptime(r["stamp"], "%Y%m%d-%H%M%S")
-        when_str = run_dt.strftime("%b %d, %Y — %I:%M %p")
-    except Exception:
-        when_str = r["stamp"]
 
-# Display metrics for this run
-c1, c2, c3 = st.columns(3)
-c1.metric("Agency", agency_name)
-c2.metric("Run by", run_by)
-c3.metric("When", when_str)
+    # Display summary of the saved run
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Agency", agency_name)
+    c2.metric("Run by", run_by)
+    c3.metric("When", when_str)
 
-# Action buttons
-c1b, c2b = st.columns(2)
-view_btn  = c1b.button("View saved metrics (no re-run)")
-rerun_btn = c2b.button("Re-run this report with stored inputs", type="primary")
+    # Actions: view saved (no compute) OR re-run with stored inputs
+    c1b, c2b = st.columns(2)
+    view_btn  = c1b.button("View saved metrics (no re-run)")
+    rerun_btn = c2b.button("Re-run this report with stored inputs", type="primary")
 
-if view_btn:
-    st.session_state["viewing_saved"] = True
-    st.session_state["loaded_run_dir"] = r["path"]
-    st.session_state["loaded_config"]  = cfg
-    st.rerun()
+    if view_btn:
+        st.session_state["viewing_saved"] = True
+        st.session_state["loaded_run_dir"] = r["path"]
+        st.session_state["loaded_config"]  = cfg
+        st.rerun()
 
-if rerun_btn:
-    st.session_state["replay_dir"]    = r["path"]
-    st.session_state["replay_config"] = cfg
-    st.session_state.pop("viewing_saved", None)
-    st.success("Replaying this run with the saved CSVs and current code…")
-    st.rerun()
+    if rerun_btn:
+        st.session_state["replay_dir"]    = r["path"]
+        st.session_state["replay_config"] = cfg   # pass assumptions/names/etc.
+        st.session_state.pop("viewing_saved", None)
+        st.success("Replaying this run with the saved CSVs and current code…")
+        st.rerun()
+
+
 
 # ─── 0) PROGRESS BAR ──────────────────────────────────────────────────────────
 progress = st.sidebar.progress(0)
