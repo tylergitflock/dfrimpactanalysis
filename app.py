@@ -14,6 +14,7 @@ import folium
 from folium.plugins import HeatMap
 import math
 import tempfile
+from io import BytesIO
 
 # ─── Past Runs & Helpers ─────────────────────────────────────────────────────
 import os
@@ -122,6 +123,34 @@ def save_run(agency_name, config_dict, metrics_dict, input_files_dict,
         open(os.path.join(rdir, "report.pdf"), "wb").write(pdf_bytes)
 
     return rdir
+
+def _read_bytes(path):
+    with open(path, "rb") as f:
+        return BytesIO(f.read())
+
+REPLAY = st.session_state.get("replay_dir")
+replay_cfg = st.session_state.get("replay_config", {})
+replay_inputs = {}
+
+if REPLAY:
+    inp_dir = os.path.join(REPLAY, "inputs")
+    def maybe(path):
+        return _read_bytes(path) if os.path.exists(path) else None
+
+    # These filenames must match what you save in save_run(...)
+    replay_inputs = {
+        "raw":    maybe(os.path.join(inp_dir, "raw_calls.csv")),
+        "agency": maybe(os.path.join(inp_dir, "agency_call_types.csv")),
+        "launch": maybe(os.path.join(inp_dir, "launch_sites.csv")),
+        "alpr":   maybe(os.path.join(inp_dir, "alpr.csv")),
+        "audio":  maybe(os.path.join(inp_dir, "audio.csv")),
+    }
+
+# Optional quick exit from replay mode
+if REPLAY and st.sidebar.button("⬅️ Back to Start"):
+    for k in ("replay_dir", "replay_config", "viewing_saved"):
+        st.session_state.pop(k, None)
+    st.rerun()
 
 # ─── Page Setup ───────────────────────────────────────────────────────────────
 st.set_page_config(page_title="DFR Impact Analysis", layout="wide")
@@ -265,24 +294,22 @@ if mode == "Open past report":
     c2.metric("Run by", run_by)
     c3.metric("When", when_str)
 
-    load_clicked = st.button("Load this report", type="primary")
+   c1b, c2b = st.columns(2)
+view_btn  = c1b.button("View saved metrics (no re-run)")
+rerun_btn = c2b.button("Re-run this report with stored inputs", type="primary")
 
-    if load_clicked:
-        # Read metrics (if present) and stash in session for the rest of the app to use
-        metrics = {}
-        if os.path.exists(met_path):
-            try:
-                with open(met_path, "r") as f:
-                    metrics = json.load(f)
-            except Exception:
-                pass
+if view_btn:
+    st.session_state["viewing_saved"] = True
+    st.session_state["loaded_run_dir"] = r["path"]
+    st.session_state["loaded_config"]  = cfg
+    st.rerun()
 
-        st.session_state["loaded_run_dir"] = r["path"]
-        st.session_state["loaded_config"]  = cfg
-        st.session_state["loaded_metrics"] = metrics
-
-        st.success("Report loaded. Scroll to the report section, or switch to the report tab.")
-        st.stop()
+if rerun_btn:
+    st.session_state["replay_dir"]    = r["path"]
+    st.session_state["replay_config"] = cfg   # assumptions, names, etc.
+    st.session_state.pop("viewing_saved", None)
+    st.success("Replaying this run with the saved CSVs and current code…")
+    st.rerun()
 
 # ─── 0) PROGRESS BAR ──────────────────────────────────────────────────────────
 progress = st.sidebar.progress(0)
@@ -291,12 +318,19 @@ progress = st.sidebar.progress(0)
 st.title("DFR Impact Analysis")
 
 st.sidebar.header("1) Raw Call Data")
-raw_file = st.sidebar.file_uploader("Upload Raw Call Data CSV", type=["csv"])
+if REPLAY and replay_inputs.get("raw") is not None:
+    raw_file = replay_inputs["raw"]
+    st.sidebar.success("Loaded raw call data from saved run.")
+else:
+    raw_file = st.sidebar.file_uploader("Upload Raw Call Data CSV", type=["csv"])
+
 if not raw_file:
     st.sidebar.warning("Please upload Raw Call Data to proceed.")
     st.stop()
+
 raw_df = pd.read_csv(raw_file)
 raw_df_orig = raw_df.copy()
+
 # ── normalize raw Call Type for lookup ──────────────────────────────────────
 raw_df["Call Type"] = (
     raw_df["Call Type"]
@@ -336,11 +370,16 @@ st.sidebar.download_button(
 st.sidebar.header("2) Launch Locations")
 
 # 2a) Upload a CSV or edit in place:
-launch_file = st.sidebar.file_uploader(
-    "Upload Launch Locations CSV (with any of: Name, Address, Lat, Lon)",
-    type=["csv"],
-    key="launch_csv"
-)
+if REPLAY and replay_inputs.get("launch") is not None:
+    launch_file = replay_inputs["launch"]
+    st.sidebar.success("Loaded launch sites from saved run.")
+else:
+    launch_file = st.sidebar.file_uploader(
+        "Upload Launch Locations CSV (with any of: Name, Address, Lat, Lon)",
+        type=["csv"],
+        key="launch_csv"
+    )
+
 if launch_file:
     launch_df = pd.read_csv(launch_file)
 else:
@@ -410,14 +449,15 @@ progress.progress(30)
 
 # ─── 3) Agency Call Types ──────────────────────────────────────────────────
 st.sidebar.header("3) Agency Call Types")
-ag_file = st.sidebar.file_uploader(
-    "Upload Agency Call Types CSV", 
-    type=["csv"], 
-    key="agency_csv"
-)
+if REPLAY and replay_inputs.get("agency") is not None:
+    ag_file = replay_inputs["agency"]
+    st.sidebar.success("Loaded agency call types from saved run.")
+else:
+    ag_file = st.sidebar.file_uploader("Upload Agency Call Types CSV", type=["csv"], key="agency_csv")
 if not ag_file:
     st.sidebar.error("Please upload your Agency Call Types CSV.")
     st.stop()
+agency_df = pd.read_csv(ag_file)
 
 agency_df = pd.read_csv(ag_file)
 # normalize & preview
@@ -435,11 +475,13 @@ agency_df["DFR Response (Y/N)"] = agency_df["DFR Response (Y/N)"].astype(str).st
 agency_df["Clearable (Y/N)"]    = agency_df["Clearable (Y/N)"].astype(str).str.strip().str.upper()
 
 st.sidebar.header("4) Assumptions")
-fte_hours    = st.sidebar.number_input("Full Time Work Year (hrs)", value=2080, step=1)
-officer_cost = st.sidebar.number_input("Officer Cost per FTE ($)", value=127940, step=1000, format="%d")
-cancel_rate  = st.sidebar.number_input("Drone Cancellation Rate (0–1)", value=0.11, step=0.01, format="%.2f")
-drone_speed  = st.sidebar.number_input("Drone Speed (mph)", value=51.0, step=1.0)
-drone_range  = st.sidebar.number_input("Drone Range (miles)", value=3.5, step=0.1)
+# Prefer values remembered from replay_config → assumptions
+a = (replay_cfg.get("assumptions", {}) if REPLAY else {})
+fte_hours    = st.sidebar.number_input("Full Time Work Year (hrs)", value=int(a.get("fte_hours", 2080)), step=1)
+officer_cost = st.sidebar.number_input("Officer Cost per FTE ($)", value=int(a.get("officer_cost_usd", 127940)), step=1000, format="%d")
+cancel_rate  = st.sidebar.number_input("Drone Cancellation Rate (0–1)", value=float(a.get("cancel_rate", 0.11)), step=0.01, format="%.2f")
+drone_speed  = st.sidebar.number_input("Drone Speed (mph)", value=float(a.get("drone_speed_mph", 51.0)), step=1.0)
+drone_range  = st.sidebar.number_input("Drone Range (miles)", value=float(a.get("drone_range_miles", 3.5)), step=0.1)
 progress.progress(70)
 
 # ─── Agency details (saved with each run) ────────────────────────────────────
@@ -449,9 +491,17 @@ with st.sidebar.expander("Agency details", expanded=True):
     run_notes = st.text_area("Run notes (optional)", height=80)
 
 st.sidebar.header("5) ALPR & Audio (optional)")
-alpr_file  = st.sidebar.file_uploader("Upload ALPR Data CSV", type=["csv"])
-audio_file = st.sidebar.file_uploader("Upload Audio Hits CSV", type=["csv"])
-progress.progress(80)
+if REPLAY and replay_inputs.get("alpr") is not None:
+    alpr_file = replay_inputs["alpr"]
+    st.sidebar.success("Loaded ALPR CSV from saved run.")
+else:
+    alpr_file = st.sidebar.file_uploader("Upload ALPR Data CSV", type=["csv"])
+
+if REPLAY and replay_inputs.get("audio") is not None:
+    audio_file = replay_inputs["audio"]
+    st.sidebar.success("Loaded Audio CSV from saved run.")
+else:
+    audio_file = st.sidebar.file_uploader("Upload Audio Hits CSV", type=["csv"])
 
 # ─── 6) Hotspot Area ──────────────────────────────────────────
 st.sidebar.header("6) Hotspot Area")
@@ -850,6 +900,70 @@ report_df = pd.DataFrame({
 })
 st.subheader("Report Values")
 st.dataframe(report_df, use_container_width=True)
+
+# === Auto-save this run (after metrics are computed) =========================
+try:
+    # Bundle the key metrics you want to see on the landing page / reuse later
+    metrics_dict = {
+        "total_cfs": int(total_cfs),
+        "total_alpr_audio_hits_citywide": int(total_alpr_audio) if 'total_alpr_audio' in locals() else None,
+        "dfr_responses_within_range": int(in_count),
+        "dfr_responses_to_alpr_audio_in_range": int(dfr_alpr_audio),
+        "avg_drone_eta_sec": float(avg_drone) if np.isfinite(avg_drone) else None,
+        "first_on_scene_pct": float(first_on_pct) if np.isfinite(first_on_pct) else None,
+        "expected_cfs_cleared": int(exp_cleared),
+        "officers_fte": float(officers) if np.isfinite(officers) else None,
+        "roi_usd": float(roi) if np.isfinite(roi) else None,
+        "total_dfr_calls": int(total_dfr),
+        "avg_patrol_sec_dfr": float(avg_patrol) if np.isfinite(avg_patrol) else None,
+        "avg_onscene_sec_dfr": float(avg_scene) if np.isfinite(avg_scene) else None,
+        "avg_patrol_sec_inrange": float(avg_in) if np.isfinite(avg_in) else None,
+        "p1_count_inrange": int(p1_count),
+        "avg_p1_patrol_sec_inrange": float(avg_p1_pat) if np.isfinite(avg_p1_pat) else None,
+        "avg_p1_drone_eta_sec_inrange": float(avg_p1_drone) if np.isfinite(avg_p1_drone) else None,
+        "hotspot_count": int(hotspot_count),
+        "hotspot_avg_patrol_sec": float(hotspot_avg_patrol) if np.isfinite(hotspot_avg_patrol) else None,
+        "hotspot_avg_drone_eta_sec": float(hotspot_avg_drone) if np.isfinite(hotspot_avg_drone) else None,
+        "alpr_sites_inrange": int(alpr_sites),
+        "alpr_hits_inrange_reason_filtered": int(alpr_hits),
+        "alpr_eta_sec": float(alpr_eta) if np.isfinite(alpr_eta) else None,
+        "audio_sites_inrange": int(audio_sites),
+        "audio_hits_inrange": int(audio_hits),
+        "audio_eta_sec": float(audio_eta) if np.isfinite(audio_eta) else None,
+        "clearable_inrange": int(clr_count),
+        "avg_clearable_onscene_sec": float(avg_clr) if np.isfinite(avg_clr) else None,
+    }
+
+    # Inputs we’ll save a copy of (so a past run can be replayed)
+    input_files_dict = {
+        "raw_calls.csv": raw_file,
+        "agency_call_types.csv": ag_file,
+        # launch_file may not exist if you used the inline editor — skip if None
+        "launch_locations.csv": launch_file if 'launch_file' in locals() else None,
+        "alpr.csv": alpr_file,
+        "audio.csv": audio_file,
+    }
+    # Rewind streams so save_run can read them from the start
+    for _f in list(input_files_dict.values()):
+        if _f is not None and hasattr(_f, "seek"):
+            try: _f.seek(0)
+            except Exception: pass
+
+    run_dir = save_run(
+        agency_name or "unknown_agency",
+        config_dict=config_dict,         # you already build this earlier
+        metrics_dict=metrics_dict,
+        input_files_dict=input_files_dict,
+        map_images=None,                 # hook up later if you snapshot maps
+        pdf_bytes=None                   # hook PDF generator here later
+    )
+
+    st.sidebar.success(f"📦 Run saved: {run_dir}")
+    st.session_state["last_run_dir"] = run_dir
+
+except Exception as e:
+    st.sidebar.warning(f"Couldn’t auto-save this run: {e}")
+# ============================================================================
 
 # ─── Auto-save this run ──────────────────────────────────────────────────────
 try:
