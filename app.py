@@ -238,31 +238,30 @@ if mode == "Open past report":
         except Exception:
             pass
 
-   # Safe fallbacks
-agency_name = cfg.get("agency_name", r["agency"])
-run_by      = cfg.get("analyst_name", "Unknown")
+    # Safe fallbacks
+    agency_name = cfg.get("agency_name", r["agency"])
+    run_by      = cfg.get("analyst_name", "Unknown")
 
-# Prefer saved local time (if present), else fall back to folder stamp
-if cfg.get("run_time_iso_local"):
-    try:
-        dt_local = datetime.fromisoformat(cfg["run_time_iso_local"])
-        when_str = dt_local.strftime("%b %d, %Y — %I:%M %p")
-        tz_short = cfg.get("run_timezone", "")
-        if tz_short:
-            when_str += f" {tz_short}"
-    except Exception:
+    # Prefer saved local time (if present), else fall back to folder stamp
+    if cfg.get("run_time_iso_local"):
+        try:
+            dt_local = datetime.fromisoformat(cfg["run_time_iso_local"])
+            when_str = dt_local.strftime("%b %d, %Y — %I:%M %p")
+            tz_short = cfg.get("run_timezone", "")
+            if tz_short:
+                when_str += f" {tz_short}"
+        except Exception:
+            try:
+                run_dt = datetime.strptime(r["stamp"], "%Y%m%d-%H%M%S")
+                when_str = run_dt.strftime("%b %d, %Y — %I:%M %p")
+            except Exception:
+                when_str = r["stamp"]
+    else:
         try:
             run_dt = datetime.strptime(r["stamp"], "%Y%m%d-%H%M%S")
             when_str = run_dt.strftime("%b %d, %Y — %I:%M %p")
         except Exception:
             when_str = r["stamp"]
-else:
-    try:
-        run_dt = datetime.strptime(r["stamp"], "%Y%m%d-%H%M%S")
-        when_str = run_dt.strftime("%b %d, %Y — %I:%M %p")
-    except Exception:
-        when_str = r["stamp"]
-
 
     c1, c2, c3 = st.columns(3)
     c1.metric("Agency", agency_name)
