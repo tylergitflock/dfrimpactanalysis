@@ -87,25 +87,6 @@ def save_run(agency_name, config_dict, metrics_dict, input_files_dict,
 
     return rdir
 
-def slugify(name):
-    """Convert agency name to safe folder-friendly slug."""
-    return "".join(c.lower() if c.isalnum() else "_" for c in name).strip("_")
-
-def list_runs():
-    """Return a list of all past saved runs."""
-    rows = []
-    if not os.path.isdir(BASE_DIR):
-        return rows
-    for agency in sorted(os.listdir(BASE_DIR)):
-        apath = os.path.join(BASE_DIR, agency)
-        if not os.path.isdir(apath):
-            continue
-        for stamp in sorted(os.listdir(apath), reverse=True):
-            rpath = os.path.join(apath, stamp)
-            if os.path.isdir(rpath):
-                rows.append({"agency": agency, "stamp": stamp, "path": rpath})
-    return rows
-
 def _read_bytes(path):
     with open(path, "rb") as f:
         return BytesIO(f.read())
@@ -114,13 +95,52 @@ REPLAY = st.session_state.get("replay_dir")
 replay_cfg = st.session_state.get("replay_config", {})
 replay_inputs = {}
 
-if REPLAY:
-    inp_dir = os.path.join(REPLAY, "inputs")
-    def maybe(path):
-        return _read_bytes(path) if os.path.exists(path) else None
+# === QUICK VIEW OF A SAVED RUN (no re-run) ==============================
+if st.session_state.get("viewing_saved") and st.session_state.get("loaded_run_dir"):
+    import os, json
+    run_dir = st.session_state["loaded_run_dir"]
+    cfg_p = os.path.join(run_dir, "config.json")
+    met_p = os.path.join(run_dir, "metrics.json")
 
-    # These filenames must match what you save in save_run(...)
-replay_inputs = {}
+    cfg = {}
+    metrics = {}
+    try:
+        if os.path.exists(cfg_p):
+            with open(cfg_p, "r") as f: cfg = json.load(f)
+        if os.path.exists(met_p):
+            with open(met_p, "r") as f: metrics = json.load(f)
+    except Exception as e:
+        st.error(f"Failed to load saved files: {e}")
+
+    # Header
+    st.title("Saved Report (no re-run)")
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Agency",   cfg.get("agency_name", "—"))
+    c2.metric("Run by",   cfg.get("analyst_name", "—"))
+    c3.metric("When",     cfg.get("run_time_iso_local", cfg.get("run_time_iso", "—")))
+
+    # Simple table of saved metrics
+    if metrics:
+        import pandas as pd
+        df = pd.DataFrame(
+            [{"Metric": k, "Value": v} for k, v in metrics.items()]
+        )
+        st.dataframe(df, use_container_width=True)
+    else:
+        st.info("No metrics.json found in this run.")
+
+    # Back button
+    if st.button("⬅️ Back to start"):
+        for k in ("viewing_saved", "loaded_run_dir", "loaded_config"):
+            st.session_state.pop(k, None)
+        try:
+            st.rerun()
+        except Exception:
+            st.experimental_rerun()
+
+    st.stop()  # IMPORTANT: don’t run the rest of the app
+# ========================================================================
+
 if REPLAY:
     inp_dir = os.path.join(REPLAY, "inputs")
 
@@ -303,6 +323,7 @@ if mode == "Open past report":
         st.success("Replaying this run with the saved CSVs and current code…")
         st.rerun()
 
+st.sidebar.write("DEBUG state:", dict(st.session_state))
 
 
 # ─── 0) PROGRESS BAR ──────────────────────────────────────────────────────────
