@@ -22,7 +22,42 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-BASE_DIR = "/mnt/data/runs"  # later can swap to S3, DB, etc.
+# Writable default; can be overridden with env var RUNS_DIR
+BASE_DIR = os.environ.get("RUNS_DIR", os.path.join(tempfile.gettempdir(), "dfr_runs"))
+os.makedirs(BASE_DIR, exist_ok=True)
+def save_run(agency_slug, config_dict, metrics_dict, input_files_dict, map_images=None, pdf_bytes=None):
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    # sanitize agency folder
+    agency_slug = (agency_slug or "unknown_agency").strip().replace("/", "_")
+    rdir = os.path.join(BASE_DIR, agency_slug, stamp)
+
+    os.makedirs(os.path.join(rdir, "inputs"), exist_ok=True)
+    os.makedirs(os.path.join(rdir, "maps"), exist_ok=True)
+
+    with open(os.path.join(rdir, "config.json"), "w") as f:
+        json.dump(config_dict, f, indent=2)
+    with open(os.path.join(rdir, "metrics.json"), "w") as f:
+        json.dump(metrics_dict, f, indent=2)
+
+    for name, fobj in (input_files_dict or {}).items():
+        if fobj is not None:
+            try:
+                fobj.seek(0)
+            except Exception:
+                pass
+            with open(os.path.join(rdir, "inputs", name), "wb") as out:
+                out.write(fobj.read())
+
+    if map_images:
+        for name, png_bytes in map_images.items():
+            with open(os.path.join(rdir, "maps", name), "wb") as out:
+                out.write(png_bytes)
+
+    if pdf_bytes:
+        with open(os.path.join(rdir, "report.pdf"), "wb") as out:
+            out.write(pdf_bytes)
+
+    return rdir
 
 def slugify(name):
     """Convert agency name to safe folder-friendly slug."""
