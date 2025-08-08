@@ -434,14 +434,6 @@ progress.progress(95)
 # ─── 3) OPTIONAL ALPR & AUDIO METRICS (new ALPR format) ────────────────────
 alpr_df = pd.read_csv(alpr_file) if alpr_file else None
 
-if alpr_df is not None:
-    try:
-        st.sidebar.write("ALPR rows loaded:", alpr_df.shape[0])
-        st.sidebar.write("ALPR columns:", alpr_df.columns.tolist())
-        st.sidebar.write("ALPR sample rows:", alpr_df.head(3))
-    except Exception as e:
-        st.sidebar.error(f"Debug block failed: {e}")
-
 audio_df = pd.read_csv(audio_file) if audio_file else None
 
 
