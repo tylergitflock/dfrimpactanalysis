@@ -3,7 +3,8 @@ import os
 import json
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
+from tzlocal import get_localzone
 
 import numpy as np
 import pandas as pd
@@ -27,7 +28,25 @@ import streamlit as st
 BASE_DIR = os.environ.get("RUNS_DIR", os.path.join(tempfile.gettempdir(), "dfr_runs"))
 os.makedirs(BASE_DIR, exist_ok=True)
 def save_run(agency_slug, config_dict, metrics_dict, input_files_dict, map_images=None, pdf_bytes=None):
-    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    # Detect local timezone automatically
+local_tz = get_localzone()
+
+# Local + UTC timestamps
+now_utc   = datetime.now(timezone.utc)
+now_local = now_utc.astimezone(local_tz)
+
+# Use LOCAL for the folder stamp so it matches what the user expects
+stamp = now_local.strftime("%Y%m%d-%H%M%S")
+
+config_dict = {
+    "agency_name": agency_name or "unknown_agency",
+    "analyst_name": analyst_name,
+    "notes": run_notes,
+    "run_time_iso_local": now_local.isoformat(),
+    "run_time_iso_utc": now_utc.isoformat(),
+    "run_timezone": str(local_tz),
+    # ... rest of your config fields ...
+}
     # sanitize agency folder
     agency_slug = (agency_slug or "unknown_agency").strip().replace("/", "_")
     rdir = os.path.join(BASE_DIR, agency_slug, stamp)
@@ -219,14 +238,31 @@ if mode == "Open past report":
         except Exception:
             pass
 
-    # Safe fallbacks
-    agency_name = cfg.get("agency_name", r["agency"])
-    run_by      = cfg.get("analyst_name", "Unknown")
+   # Safe fallbacks
+agency_name = cfg.get("agency_name", r["agency"])
+run_by      = cfg.get("analyst_name", "Unknown")
+
+# Prefer saved local time (if present), else fall back to folder stamp
+if cfg.get("run_time_iso_local"):
+    try:
+        dt_local = datetime.fromisoformat(cfg["run_time_iso_local"])
+        when_str = dt_local.strftime("%b %d, %Y — %I:%M %p")
+        tz_short = cfg.get("run_timezone", "")
+        if tz_short:
+            when_str += f" {tz_short}"
+    except Exception:
+        try:
+            run_dt = datetime.strptime(r["stamp"], "%Y%m%d-%H%M%S")
+            when_str = run_dt.strftime("%b %d, %Y — %I:%M %p")
+        except Exception:
+            when_str = r["stamp"]
+else:
     try:
         run_dt = datetime.strptime(r["stamp"], "%Y%m%d-%H%M%S")
         when_str = run_dt.strftime("%b %d, %Y — %I:%M %p")
     except Exception:
         when_str = r["stamp"]
+
 
     c1, c2, c3 = st.columns(3)
     c1.metric("Agency", agency_name)
