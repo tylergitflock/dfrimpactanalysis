@@ -27,38 +27,33 @@ import streamlit as st
 # Writable default; can be overridden with env var RUNS_DIR
 BASE_DIR = os.environ.get("RUNS_DIR", os.path.join(tempfile.gettempdir(), "dfr_runs"))
 os.makedirs(BASE_DIR, exist_ok=True)
-def save_run(agency_slug, config_dict, metrics_dict, input_files_dict, map_images=None, pdf_bytes=None):
-    # Detect local timezone automatically
-local_tz = get_localzone()
 
-# Local + UTC timestamps
-now_utc   = datetime.now(timezone.utc)
-now_local = now_utc.astimezone(local_tz)
+# --- Save a run (REPLACE your existing save_run with this) ---
+def save_run(agency_slug, config_dict, metrics_dict, input_files_dict,
+             map_images=None, pdf_bytes=None):
+    # Attach local timestamp + timezone so the landing page can show “user local time”
+    try:
+        local_tz = get_localzone()
+        now_local = datetime.now(local_tz)
+        config_dict["run_time_iso_local"] = now_local.isoformat()
+        config_dict["run_timezone"] = str(local_tz)
+    except Exception:
+        pass  # if tz lookup fails, we still save the run
 
-# Use LOCAL for the folder stamp so it matches what the user expects
-stamp = now_local.strftime("%Y%m%d-%H%M%S")
-
-config_dict = {
-    "agency_name": agency_name or "unknown_agency",
-    "analyst_name": analyst_name,
-    "notes": run_notes,
-    "run_time_iso_local": now_local.isoformat(),
-    "run_time_iso_utc": now_utc.isoformat(),
-    "run_timezone": str(local_tz),
-    # ... rest of your config fields ...
-}
-    # sanitize agency folder
-    agency_slug = (agency_slug or "unknown_agency").strip().replace("/", "_")
+    # Folder name stamp (UTC-naive is fine; we display local from config above)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     rdir = os.path.join(BASE_DIR, agency_slug, stamp)
 
     os.makedirs(os.path.join(rdir, "inputs"), exist_ok=True)
     os.makedirs(os.path.join(rdir, "maps"), exist_ok=True)
 
+    # Save config + metrics
     with open(os.path.join(rdir, "config.json"), "w") as f:
         json.dump(config_dict, f, indent=2)
     with open(os.path.join(rdir, "metrics.json"), "w") as f:
         json.dump(metrics_dict, f, indent=2)
 
+    # Save original inputs
     for name, fobj in (input_files_dict or {}).items():
         if fobj is not None:
             try:
@@ -68,11 +63,13 @@ config_dict = {
             with open(os.path.join(rdir, "inputs", name), "wb") as out:
                 out.write(fobj.read())
 
+    # Save any generated map images
     if map_images:
         for name, png_bytes in map_images.items():
             with open(os.path.join(rdir, "maps", name), "wb") as out:
                 out.write(png_bytes)
 
+    # Save PDF if present
     if pdf_bytes:
         with open(os.path.join(rdir, "report.pdf"), "wb") as out:
             out.write(pdf_bytes)
