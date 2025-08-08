@@ -248,6 +248,39 @@ progress.progress(70)
 st.sidebar.header("5) ALPR & Audio (optional)")
 alpr_file  = st.sidebar.file_uploader("Upload ALPR Data CSV", type=["csv"])
 audio_file = st.sidebar.file_uploader("Upload Audio Hits CSV", type=["csv"])
+# ─── Citywide totals (NO filters) for report line "Total ALPR + Audio Hits" ──
+def _find_col(df, candidates):
+    if df is None or df.empty:
+        return None
+    lut = {c.strip().lower(): c for c in df.columns}
+    for name in candidates:
+        k = name.strip().lower()
+        if k in lut:
+            return lut[k]
+    return None
+
+total_alpr_hits = 0
+if alpr_df is not None and not alpr_df.empty:
+    # New ALPR export: "Sum of hits" is column G; header appears as "Sum" in your screenshot
+    alpr_hits_col = _find_col(alpr_df, ["Sum of hits", "Sum", "Hits", "Total Hits"])
+    if alpr_hits_col:
+        total_alpr_hits = int(pd.to_numeric(alpr_df[alpr_hits_col], errors="coerce").fillna(0).sum())
+
+total_audio_hits = 0
+if audio_df is not None and not audio_df.empty:
+    # New Audio export: "Number of hits"
+    audio_hits_col = _find_col(audio_df, ["Number of hits", "Hits", "Count", "Count of Audio Hit Id"])
+    if audio_hits_col:
+        total_audio_hits = int(pd.to_numeric(audio_df[audio_hits_col], errors="coerce").fillna(0).sum())
+
+total_alpr_audio = total_alpr_hits + total_audio_hits
+
+# Optional: quick confirmation in Audit Mode only (not sidebar spam)
+# (We’ll display this inside Audit Mode below; nothing printed here.)
+
+# TODO(Tyler): We currently include ALPR/Audio hits in `exp_cleared` via `dfr_alpr_audio`
+# using the same `cancel_rate`. We should likely apply a LOWER clearance rate to ALPR/Audio.
+# Leave as-is for now, but we need to decide the right rate(s).
 progress.progress(80)
 
 # ─── 6) Hotspot Area ──────────────────────────────────────────
@@ -565,27 +598,6 @@ else:
 
 # combine for your overall “DFR + ALPR + Audio” metric
 dfr_alpr_audio = alpr_hits + audio_hits
-
-# --- Unfiltered totals for ALPR + Audio (for the report/debug) ---
-total_alpr_hits = 0
-if alpr_df is not None and not alpr_df.empty:
-    # treat col 1/2 as lat/lon; only count rows that look like real points
-    alpr_lat_ok = pd.to_numeric(alpr_df.iloc[:, 1], errors="coerce").notna()
-    total_alpr_hits = int(
-        pd.to_numeric(alpr_df.iloc[:, 3], errors="coerce").fillna(0)[alpr_lat_ok].sum()
-    )
-
-total_audio_hits = 0
-if audio_df is not None and not audio_df.empty:
-    # find a hits column robustly (your new export uses "Number of hits")
-    lc = {c.strip().lower(): c for c in audio_df.columns}
-    hits_col = None
-    for k in ["number of hits", "count of audio hit id", "hits", "count"]:
-        if k in lc:
-            hits_col = lc[k]; break
-    total_audio_hits = int(pd.to_numeric(audio_df[hits_col], errors="coerce").fillna(0).sum()) if hits_col else len(audio_df)
-
-total_alpr_audio = total_alpr_hits + total_audio_hits
 
 # ─── 4) METRICS & REPORT ─────────────────────────────────────────────────────
 total_cfs   = raw_count
