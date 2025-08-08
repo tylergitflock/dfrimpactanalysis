@@ -183,19 +183,74 @@ def auto_heat_params(df, max_radius=50, max_blur=50):
 with st.sidebar.expander("🧭 Start", expanded=True):
     mode = st.radio("Choose:", ["Start new report", "Open past report"])
 
+from datetime import datetime
+import os, json
+
 if mode == "Open past report":
     runs = list_runs()
     if not runs:
         st.info("No past runs found yet.")
-    else:
-        sel = st.selectbox("Select a past run", [f"{r['agency']} / {r['stamp']}" for r in runs])
-        if sel:
-            r = runs[[f"{x['agency']} / {x['stamp']}" for x in runs].index(sel)]
-            cfg_p = os.path.join(r["path"], "config.json")
-            met_p = os.path.join(r["path"], "metrics.json")
-            st.write("**Config:**", cfg_p if os.path.exists(cfg_p) else "missing")
-            st.write("**Metrics:**", met_p if os.path.exists(met_p) else "missing")
-            st.stop()
+        st.stop()
+
+    # Pretty labels for the dropdown
+    def _label(r):
+        try:
+            dt = datetime.strptime(r["stamp"], "%Y%m%d-%H%M%S")
+            when = dt.strftime("%Y-%m-%d %H:%M:%S")
+        except Exception:
+            when = r["stamp"]
+        return f"{r['agency']} / {when}"
+
+    idx = st.selectbox(
+        "Select a past run",
+        options=range(len(runs)),
+        format_func=lambda i: _label(runs[i]),
+    )
+    r = runs[idx]
+
+    cfg_path = os.path.join(r["path"], "config.json")
+    met_path = os.path.join(r["path"], "metrics.json")
+
+    cfg = {}
+    if os.path.exists(cfg_path):
+        try:
+            with open(cfg_path, "r") as f:
+                cfg = json.load(f)
+        except Exception:
+            pass
+
+    # Safe fallbacks
+    agency_name = cfg.get("agency_name", r["agency"])
+    run_by      = cfg.get("analyst_name", "Unknown")
+    try:
+        run_dt = datetime.strptime(r["stamp"], "%Y%m%d-%H%M%S")
+        when_str = run_dt.strftime("%b %d, %Y — %I:%M %p")
+    except Exception:
+        when_str = r["stamp"]
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Agency", agency_name)
+    c2.metric("Run by", run_by)
+    c3.metric("When", when_str)
+
+    load_clicked = st.button("Load this report", type="primary")
+
+    if load_clicked:
+        # Read metrics (if present) and stash in session for the rest of the app to use
+        metrics = {}
+        if os.path.exists(met_path):
+            try:
+                with open(met_path, "r") as f:
+                    metrics = json.load(f)
+            except Exception:
+                pass
+
+        st.session_state["loaded_run_dir"] = r["path"]
+        st.session_state["loaded_config"]  = cfg
+        st.session_state["loaded_metrics"] = metrics
+
+        st.success("Report loaded. Scroll to the report section, or switch to the report tab.")
+        st.stop()
 
 # ─── 0) PROGRESS BAR ──────────────────────────────────────────────────────────
 progress = st.sidebar.progress(0)
