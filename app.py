@@ -99,6 +99,7 @@ if not raw_file:
     st.sidebar.warning("Please upload Raw Call Data to proceed.")
     st.stop()
 raw_df = pd.read_csv(raw_file)
+raw_df_orig = raw_df.copy()
 # ── normalize raw Call Type for lookup ──────────────────────────────────────
 raw_df["Call Type"] = (
     raw_df["Call Type"]
@@ -323,48 +324,6 @@ valid = (
   &  create_dt.notna()
 )
 
-# === Clear, non-overlapping audit of validity filters ===
-missing_ts = create_dt.isna() | dispatch_dt.isna() | arrive_dt.isna()
-bad_dispatch = dispatch_dt <= create_dt
-bad_arrive_vs_dispatch = arrive_dt <= dispatch_dt
-bad_arrive_vs_create   = arrive_dt <= create_dt
-too_fast = response_sec <= 5
-
-fail_any = missing_ts | bad_dispatch | bad_arrive_vs_dispatch | bad_arrive_vs_create | too_fast
-pass_all = ~fail_any
-
-# Mutually-exclusive buckets (so they add up)
-only_missing   =  missing_ts & ~(bad_dispatch | bad_arrive_vs_dispatch | bad_arrive_vs_create | too_fast)
-only_dispatch  =  bad_dispatch & ~(missing_ts | bad_arrive_vs_dispatch | bad_arrive_vs_create | too_fast)
-only_arr_vs_dis=  bad_arrive_vs_dispatch & ~(missing_ts | bad_dispatch | bad_arrive_vs_create | too_fast)
-only_arr_vs_cr =  bad_arrive_vs_create   & ~(missing_ts | bad_dispatch | bad_arrive_vs_dispatch | too_fast)
-only_fast      =  too_fast & ~(missing_ts | bad_dispatch | bad_arrive_vs_dispatch | bad_arrive_vs_create)
-
-# Everything else = failed multiple rules
-multi_fail = fail_any & ~(only_missing | only_dispatch | only_arr_vs_dis | only_arr_vs_cr | only_fast)
-
-with st.sidebar.expander("CFS filtering audit", expanded=True):
-    st.write(f"Raw rows: {len(raw_df):,}")
-    st.write(f"Rows passing validity: {int(pass_all.sum()):,}")
-    st.write(f"Rows failing ANY rule: {int(fail_any.sum()):,}  "
-             f"(should equal Raw − Passing = {len(raw_df)-int(pass_all.sum()):,})")
-
-    st.markdown("**Failed exactly one rule (mutually exclusive):**")
-    st.write(f"• Missing timestamp(s): {int(only_missing.sum()):,}")
-    st.write(f"• Dispatch not after create: {int(only_dispatch.sum()):,}")
-    st.write(f"• Arrive not after dispatch: {int(only_arr_vs_dis.sum()):,}")
-    st.write(f"• Arrive not after create: {int(only_arr_vs_cr.sum()):,}")
-    st.write(f"• Response ≤ 5s: {int(only_fast.sum()):,}")
-
-    st.write(f"• Failed multiple rules (overlap): {int(multi_fail.sum()):,}")
-
-    # sanity: tiny/negative response distribution
-    small = response_sec[fail_any].dropna()
-    st.write(
-        "Tiny/negative response snapshot (seconds): "
-        f"≤0s: {(small<=0).sum():,}, 1–5s: {((small>0)&(small<=5)).sum():,}, "
-        f"median of failures: {np.nanmedian(small) if len(small)>0 else '—'}"
-    )
 # — filter down your DataFrame & all series
 raw_df      = raw_df.loc[valid].copy()
 create_dt   = create_dt[valid]
@@ -714,7 +673,7 @@ report_df = pd.DataFrame({
 st.subheader("Report Values")
 st.dataframe(report_df, use_container_width=True)
 
-# ─── AUDIT MODE ─────────────────────────────────────────────────────────────
+# ─── AUDIT MODE ──────────────────────────────────────────────────────────────
 with st.sidebar.expander("🔎 Audit Mode", expanded=False):
     audit_on = st.checkbox("Enable audit diagnostics", value=False)
 
@@ -722,23 +681,73 @@ if audit_on:
     st.markdown("### Audit — Core Subsets")
     def n(x): return 0 if x is None else (len(x) if hasattr(x, "__len__") else int(x))
 
-    c1,c2,c3 = st.columns(3)
+    c1, c2, c3 = st.columns(3)
     c1.metric("Raw rows (uploaded)", f"{raw_count:,}")
     c2.metric("df_all (validity filtered)", f"{len(df_all):,}")
     c3.metric("DFR-eligible (dfr_only)", f"{len(dfr_only):,}")
 
-    c1,c2,c3 = st.columns(3)
+    # --- CFS filtering audit ---
+    with st.expander("CFS filtering audit (pre-filter data)", expanded=False):
+        col_map0 = {c.lower(): c for c in raw_df_orig.columns}
+        def pick0(*alts):
+            for a in alts:
+                if a.lower() in col_map0:
+                    return col_map0[a.lower()]
+            return None
+
+        c_create0 = pick0("Call Create", "Time Call Entered Queue")
+        c_dispatch0 = pick0("First Dispatch", "Time First Unit Assigned", "First Unit Assigned", "Time First Dispatch")
+        c_arrive0 = pick0("First Arrive", "Time First Unit Arrived")
+
+        if c_create0 and c_dispatch0 and c_arrive0:
+            create_all   = parse_time_series(raw_df_orig[c_create0])
+            dispatch_all = parse_time_series(raw_df_orig[c_dispatch0])
+            arrive_all   = parse_time_series(raw_df_orig[c_arrive0])
+            response_all = (arrive_all - create_all).dt.total_seconds()
+
+            missing_ts        = create_all.isna() | dispatch_all.isna() | arrive_all.isna()
+            bad_dispatch      = dispatch_all <= create_all
+            bad_arr_vs_dis    = arrive_all <= dispatch_all
+            bad_arr_vs_create = arrive_all <= create_all
+            too_fast          = response_all <= 5
+
+            fail_any = missing_ts | bad_dispatch | bad_arr_vs_dis | bad_arr_vs_create | too_fast
+            pass_all = ~fail_any
+
+            only_missing    = missing_ts & ~(bad_dispatch | bad_arr_vs_dis | bad_arr_vs_create | too_fast)
+            only_dispatch   = bad_dispatch & ~(missing_ts | bad_arr_vs_dis | bad_arr_vs_create | too_fast)
+            only_arr_vs_dis = bad_arr_vs_dis & ~(missing_ts | bad_dispatch | bad_arr_vs_create | too_fast)
+            only_arr_vs_cr  = bad_arr_vs_create & ~(missing_ts | bad_dispatch | bad_arr_vs_dis | too_fast)
+            only_fast       = too_fast & ~(missing_ts | bad_dispatch | bad_arr_vs_dis | bad_arr_vs_create)
+            multi_fail      = fail_any & ~(only_missing | only_dispatch | only_arr_vs_dis | only_arr_vs_cr | only_fast)
+
+            st.write(f"Raw rows: {len(raw_df_orig):,}")
+            st.write(f"Rows passing validity: {int(pass_all.sum()):,}  (df_all rows = {len(df_all):,})")
+            st.write(f"Rows failing ANY rule: {int(fail_any.sum()):,}")
+
+            st.markdown("**Failed exactly one rule:**")
+            st.write(f"• Missing timestamp(s): {int(only_missing.sum()):,}")
+            st.write(f"• Dispatch not after create: {int(only_dispatch.sum()):,}")
+            st.write(f"• Arrive not after dispatch: {int(only_arr_vs_dis.sum()):,}")
+            st.write(f"• Arrive not after create: {int(only_arr_vs_cr.sum()):,}")
+            st.write(f"• Response ≤ 5s: {int(only_fast.sum()):,}")
+            st.write(f"• Failed multiple rules (overlap): {int(multi_fail.sum()):,}")
+        else:
+            st.warning("CFS audit skipped: missing Create, Dispatch, or Arrive column.")
+
+    # --- Main subset metrics ---
+    c1, c2, c3 = st.columns(3)
     c1.metric("In-range (<= range mi)", f"{len(in_range):,}")
     c2.metric("Clearable in-range", f"{len(clearable):,}")
     c3.metric("Hotspot DFR (≤ 0.5 mi)", f"{hotspot_count:,}")
 
     st.markdown("### Audit — Audio & ALPR")
-    c1,c2,c3 = st.columns(3)
+    c1, c2, c3 = st.columns(3)
     c1.metric("Audio sites (in-range)", f"{audio_sites:,}")
     c2.metric("Audio hits (in-range)", f"{audio_hits:,}")
     c3.metric("Audio ETA (mm:ss)", pretty_value(audio_eta, "mmss"))
 
-    c1,c2,c3 = st.columns(3)
+    c1, c2, c3 = st.columns(3)
     c1.metric("ALPR sites (in-range)", f"{alpr_sites:,}")
     c2.metric("ALPR hits (in-range, reason-filtered)", f"{alpr_hits:,}")
     c3.metric("ALPR ETA (mm:ss)", pretty_value(alpr_eta, "mmss"))
@@ -749,19 +758,16 @@ if audit_on:
 
     st.markdown("**Examples feeding each metric (first 5 rows)**")
     st.write("• `in_range` (DFR Responses within Range / first-on-scene / avg drone time):")
-    st.dataframe(in_range[["lat","lon","dist_mi","drone_eta_sec","patrol_sec","call_type_up","priority"]].head())
+    st.dataframe(in_range[["lat", "lon", "dist_mi", "drone_eta_sec", "patrol_sec", "call_type_up", "priority"]].head())
 
     st.write("• `clearable` (clearable metrics):")
-    st.dataframe(clearable[["onscene_sec","call_type_up","priority","dist_mi"]].head())
+    st.dataframe(clearable[["onscene_sec", "call_type_up", "priority", "dist_mi"]].head())
 
     if audio_pts is not None:
         st.write("• Audio (raw valid rows used for stats; intensity=Number of Hits):")
         st.dataframe(audio_pts.head())
 
-    # If your ALPR block created a DataFrame of filtered rows, show it (optional).
-    # Otherwise, show a small sample from the CSV with computed distance.
     try:
-        # recompute a tiny ALPR preview with distance & reason flag
         _alat = pd.to_numeric(alpr_df["Latitude"], errors="coerce")
         _alon = pd.to_numeric(alpr_df["Longitude"], errors="coerce")
         _hits = pd.to_numeric(alpr_df["Sum"], errors="coerce").fillna(0)
@@ -777,13 +783,13 @@ if audit_on:
             "reason_up": _rsn[_valid].values,
             "in_range": _inrng,
             "whitelist_reason": _rsn[_valid].isin({
-                "GANG OR SUSPECTED TERRORIST","MISSING PERSON","HOTLIST HITS",
-                "SEX OFFENDER","STOLEN PLATE","STOLEN VEHICLE","VIOLENT PERSON"
+                "GANG OR SUSPECTED TERRORIST", "MISSING PERSON", "HOTLIST HITS",
+                "SEX OFFENDER", "STOLEN PLATE", "STOLEN VEHICLE", "VIOLENT PERSON"
             }).values
         }).head(10)
         st.write("• ALPR preview (distance, in-range, whitelist flags):")
         st.dataframe(_dfprev)
-    except Exception as _:
+    except Exception:
         pass
 
     st.markdown("### Audit — Key derived values")
