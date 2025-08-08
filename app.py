@@ -319,6 +319,12 @@ drone_speed  = st.sidebar.number_input("Drone Speed (mph)", value=51.0, step=1.0
 drone_range  = st.sidebar.number_input("Drone Range (miles)", value=3.5, step=0.1)
 progress.progress(70)
 
+# ─── Agency details (saved with each run) ────────────────────────────────────
+with st.sidebar.expander("Agency details", expanded=True):
+    agency_name = st.text_input("Agency name", value="", placeholder="e.g., Fort Worth PD")
+    analyst_name = st.text_input("Analyst (optional)", value="")
+    run_notes = st.text_area("Run notes (optional)", height=80)
+
 st.sidebar.header("5) ALPR & Audio (optional)")
 alpr_file  = st.sidebar.file_uploader("Upload ALPR Data CSV", type=["csv"])
 audio_file = st.sidebar.file_uploader("Upload Audio Hits CSV", type=["csv"])
@@ -721,6 +727,95 @@ report_df = pd.DataFrame({
 })
 st.subheader("Report Values")
 st.dataframe(report_df, use_container_width=True)
+
+# ─── Auto-save this run ──────────────────────────────────────────────────────
+try:
+    # Build a clean metrics dict with raw numbers (not pretty strings)
+    metrics_dict = {
+        "total_cfs": int(total_cfs),
+        "total_alpr_audio_hits_citywide": int(total_alpr_audio) if 'total_alpr_audio' in locals() else None,
+        "dfr_responses_within_range": int(in_count),
+        "dfr_responses_to_alpr_audio_within_range": int(dfr_alpr_audio),
+        "expected_drone_eta_sec": float(avg_drone) if np.isfinite(avg_drone) else None,
+        "expected_first_on_scene_pct": float(first_on_pct) if np.isfinite(first_on_pct) else None,
+        "expected_cfs_cleared": int(exp_cleared),
+        "officers_fte": float(officers) if np.isfinite(officers) else None,
+        "roi_usd": float(roi) if np.isfinite(roi) else None,
+        "total_potential_dfr_calls": int(total_dfr),
+        "avg_patrol_to_dfr_sec": float(avg_patrol) if np.isfinite(avg_patrol) else None,
+        "avg_scene_time_dfr_sec": float(avg_scene) if np.isfinite(avg_scene) else None,
+        "avg_inrange_patrol_sec": float(avg_in) if np.isfinite(avg_in) else None,
+        "expected_decrease_response_times_pct": float(pct_dec) if np.isfinite(pct_dec) else None,
+        "p1_inrange_count": int(p1_count),
+        "avg_p1_patrol_sec": float(avg_p1_pat) if np.isfinite(avg_p1_pat) else None,
+        "avg_p1_drone_eta_sec": float(avg_p1_drone) if np.isfinite(avg_p1_drone) else None,
+        "hotspot_count": int(hotspot_count),
+        "hotspot_avg_patrol_sec": float(hotspot_avg_patrol) if np.isfinite(hotspot_avg_patrol) else None,
+        "hotspot_avg_drone_eta_sec": float(hotspot_avg_drone) if np.isfinite(hotspot_avg_drone) else None,
+        "alpr_sites_in_range": int(alpr_sites) if 'alpr_sites' in locals() else 0,
+        "alpr_hits_in_range_reason_filtered": int(alpr_hits) if 'alpr_hits' in locals() else 0,
+        "alpr_eta_sec": float(alpr_eta) if ('alpr_eta' in locals() and np.isfinite(alpr_eta)) else None,
+        "audio_sites_in_range": int(audio_sites) if 'audio_sites' in locals() else 0,
+        "audio_hits_in_range": int(audio_hits) if 'audio_hits' in locals() else 0,
+        "audio_eta_sec": float(audio_eta) if ('audio_eta' in locals() and np.isfinite(audio_eta)) else None,
+        "clearable_in_range": int(clr_count),
+        "avg_clearable_scene_sec": float(avg_clr) if np.isfinite(avg_clr) else None,
+        "total_time_on_clearable_sec": float(clr_count * avg_clr) if (np.isfinite(avg_clr)) else None,
+    }
+
+    # Config/context so we can reproduce the run later
+    config_dict = {
+        "agency_name": agency_name or "unknown_agency",
+        "analyst_name": analyst_name,
+        "notes": run_notes,
+        "run_time_iso": datetime.now().isoformat(),
+        "assumptions": {
+            "fte_hours": int(fte_hours),
+            "officer_cost_usd": int(officer_cost),
+            "cancel_rate": float(cancel_rate),
+            "drone_speed_mph": float(drone_speed),
+            "drone_range_miles": float(drone_range),
+        },
+        "launch_sites_count": len(launch_coords) if 'launch_coords' in locals() else 0,
+        "hotspot": {
+            "address": hotspot_address if 'hotspot_address' in locals() else None,
+            "coords": list(hotspot_coords[0]) if (hotspot_coords) else None,
+            "radius_miles": 0.5 if hotspot_coords else None,
+        },
+        "dfr_map_values_sample": list(sorted(dfr_map))[:25],
+        "clearable_map_values_sample": list(sorted(clr_map))[:25],
+        "raw_counts": {
+            "raw_uploaded_rows": int(raw_count),
+            "df_all_rows": int(len(df_all)),
+            "dfr_only_rows": int(len(dfr_only)),
+            "in_range_rows": int(len(in_range)),
+            "clearable_rows": int(len(clearable)),
+        },
+        "app_version": "auto-logger-v1",
+    }
+
+    # Package the uploaded files so they’re saved alongside the run
+    input_files_dict = {
+        (raw_file.name if raw_file else "raw_calls.csv"): raw_file,
+        (ag_file.name if ag_file else "agency_call_types.csv"): ag_file,
+        (alpr_file.name if alpr_file else "alpr.csv"): alpr_file,
+        (audio_file.name if audio_file else "audio.csv"): audio_file,
+    }
+
+    run_dir = save_run(
+        agency_name or "unknown_agency",
+        config_dict=config_dict,
+        metrics_dict=metrics_dict,
+        input_files_dict=input_files_dict,
+        map_images=None,     # we can wire map snapshots later
+        pdf_bytes=None       # we’ll hook the PDF generator here later
+    )
+
+    st.sidebar.success(f"📦 Run saved: {run_dir}")
+    st.session_state["last_run_dir"] = run_dir
+
+except Exception as e:
+    st.sidebar.warning(f"Couldn’t auto-save this run: {e}")
 
 # ─── AUDIT MODE ──────────────────────────────────────────────────────────────
 with st.sidebar.expander("🔎 Audit Mode", expanded=False):
