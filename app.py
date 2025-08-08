@@ -1,4 +1,10 @@
 import io
+import os
+import json
+import time
+import uuid
+from datetime import datetime
+
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -6,6 +12,59 @@ from streamlit_folium import st_folium
 import folium
 from folium.plugins import HeatMap
 import math
+
+# --- Past runs landing page setup ---
+BASE_DIR = "/mnt/data/runs"  # swap to S3 or other path later
+
+def list_runs():
+    rows = []
+    if not os.path.isdir(BASE_DIR): 
+        return rows
+    for agency in sorted(os.listdir(BASE_DIR)):
+        apath = os.path.join(BASE_DIR, agency)
+        if not os.path.isdir(apath): continue
+        for stamp in sorted(os.listdir(apath), reverse=True):
+            rpath = os.path.join(apath, stamp)
+            if os.path.isdir(rpath):
+                rows.append({"agency": agency, "stamp": stamp, "path": rpath})
+    return rows
+
+with st.sidebar.expander("🧭 Start", expanded=True):
+    mode = st.radio("Choose:", ["Start new report", "Open past report"])
+
+if mode == "Open past report":
+    runs = list_runs()
+    if not runs:
+        st.info("No past runs found yet.")
+    else:
+        sel = st.selectbox("Select a past run", [f"{r['agency']} / {r['stamp']}" for r in runs])
+        if sel:
+            r = runs[[f"{x['agency']} / {x['stamp']}" for x in runs].index(sel)]
+            cfg_p = os.path.join(r["path"], "config.json")
+            met_p = os.path.join(r["path"], "metrics.json")
+            st.write("**Config:**", cfg_p if os.path.exists(cfg_p) else "missing")
+            st.write("**Metrics:**", met_p if os.path.exists(met_p) else "missing")
+            st.stop()
+else:
+    pass
+
+def save_run(agency_slug, config_dict, metrics_dict, input_files_dict, map_images=None, pdf_bytes=None):
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    rdir = os.path.join(BASE_DIR, agency_slug, stamp)
+    os.makedirs(os.path.join(rdir, "inputs"), exist_ok=True)
+    os.makedirs(os.path.join(rdir, "maps"), exist_ok=True)
+    with open(os.path.join(rdir, "config.json"), "w") as f: json.dump(config_dict, f, indent=2)
+    with open(os.path.join(rdir, "metrics.json"), "w") as f: json.dump(metrics_dict, f, indent=2)
+    for name, fobj in input_files_dict.items():
+        if fobj is not None:
+            fobj.seek(0)
+            open(os.path.join(rdir, "inputs", name), "wb").write(fobj.read())
+    if map_images:
+        for name, png_bytes in map_images.items():
+            open(os.path.join(rdir, "maps", name), "wb").write(png_bytes)
+    if pdf_bytes:
+        open(os.path.join(rdir, "report.pdf"), "wb").write(pdf_bytes)
+    return rdir
 
 st.set_page_config(page_title="DFR Impact Analysis", layout="wide")
 
