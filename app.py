@@ -560,9 +560,6 @@ if audio_df is not None and not audio_df.empty:
         w_sum    = hits_v[in_rng2].sum()
         audio_eta = float((etas_sec[in_rng2] * hits_v[in_rng2]).sum() / w_sum) if w_sum > 0 else np.nan
 
-        # ── DEBUG: total unfiltered hits (all valid rows, regardless of range) ─
-        total_audio_hits = int(hits_v.sum())
-        st.sidebar.write(f"Total unfiltered Audio hits: {total_audio_hits:,}")
 
         # ── HEATMAP DATA = ALL VALID POINTS (not only in-range) ───────────────
         audio_pts = pd.DataFrame({
@@ -597,10 +594,6 @@ if audio_df is not None and not audio_df.empty:
     total_audio_hits = int(pd.to_numeric(audio_df[hits_col], errors="coerce").fillna(0).sum()) if hits_col else len(audio_df)
 
 total_alpr_audio = total_alpr_hits + total_audio_hits
-
-# optional sidebar debug
-st.sidebar.write(f"Total unfiltered ALPR hits: {total_alpr_hits:,}")
-st.sidebar.write(f"Total unfiltered Audio hits: {total_audio_hits:,}")
 
 # ─── 4) METRICS & REPORT ─────────────────────────────────────────────────────
 total_cfs   = raw_count
