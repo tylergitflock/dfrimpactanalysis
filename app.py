@@ -248,39 +248,6 @@ progress.progress(70)
 st.sidebar.header("5) ALPR & Audio (optional)")
 alpr_file  = st.sidebar.file_uploader("Upload ALPR Data CSV", type=["csv"])
 audio_file = st.sidebar.file_uploader("Upload Audio Hits CSV", type=["csv"])
-# ─── Citywide totals (NO filters) for report line "Total ALPR + Audio Hits" ──
-def _find_col(df, candidates):
-    if df is None or df.empty:
-        return None
-    lut = {c.strip().lower(): c for c in df.columns}
-    for name in candidates:
-        k = name.strip().lower()
-        if k in lut:
-            return lut[k]
-    return None
-
-total_alpr_hits = 0
-if alpr_df is not None and not alpr_df.empty:
-    # New ALPR export: "Sum of hits" is column G; header appears as "Sum" in your screenshot
-    alpr_hits_col = _find_col(alpr_df, ["Sum of hits", "Sum", "Hits", "Total Hits"])
-    if alpr_hits_col:
-        total_alpr_hits = int(pd.to_numeric(alpr_df[alpr_hits_col], errors="coerce").fillna(0).sum())
-
-total_audio_hits = 0
-if audio_df is not None and not audio_df.empty:
-    # New Audio export: "Number of hits"
-    audio_hits_col = _find_col(audio_df, ["Number of hits", "Hits", "Count", "Count of Audio Hit Id"])
-    if audio_hits_col:
-        total_audio_hits = int(pd.to_numeric(audio_df[audio_hits_col], errors="coerce").fillna(0).sum())
-
-total_alpr_audio = total_alpr_hits + total_audio_hits
-
-# Optional: quick confirmation in Audit Mode only (not sidebar spam)
-# (We’ll display this inside Audit Mode below; nothing printed here.)
-
-# TODO(Tyler): We currently include ALPR/Audio hits in `exp_cleared` via `dfr_alpr_audio`
-# using the same `cancel_rate`. We should likely apply a LOWER clearance rate to ALPR/Audio.
-# Leave as-is for now, but we need to decide the right rate(s).
 progress.progress(80)
 
 # ─── 6) Hotspot Area ──────────────────────────────────────────
@@ -466,9 +433,23 @@ if hotspot_coords:
 progress.progress(95)
 # ─── 3) OPTIONAL ALPR & AUDIO METRICS (new ALPR format) ────────────────────
 alpr_df = pd.read_csv(alpr_file) if alpr_file else None
-
 audio_df = pd.read_csv(audio_file) if audio_file else None
 
+# --- Unfiltered totals for ALPR + Audio (for the report/debug) ---
+total_alpr_hits  = 0
+total_audio_hits = 0
+
+if alpr_df is not None and not alpr_df.empty:
+    # Sum all hits in "Sum of hits" col (col 6 index if not renamed)
+    hits_col = "Sum of hits" if "Sum of hits" in alpr_df.columns else alpr_df.columns[6]
+    total_alpr_hits = pd.to_numeric(alpr_df[hits_col], errors="coerce").fillna(0).sum()
+
+if audio_df is not None and not audio_df.empty:
+    # Sum all hits in "Number of hits" col (col F index if not renamed)
+    hits_col = "Number of hits" if "Number of hits" in audio_df.columns else audio_df.columns[5]
+    total_audio_hits = pd.to_numeric(audio_df[hits_col], errors="coerce").fillna(0).sum()
+
+total_alpr_audio = int(total_alpr_hits + total_audio_hits)
 
 # initialize metrics
 alpr_sites = alpr_hits = alpr_eta = 0
@@ -592,9 +573,6 @@ if audio_df is not None and not audio_df.empty:
             "lon":   lon_v.values,
             "count": hits_v.values,   # optional intensity for HeatMap
         })
-else:
-    # keep previous total display consistent even when no file
-    st.sidebar.write("Total unfiltered Audio hits: 0")
 
 # combine for your overall “DFR + ALPR + Audio” metric
 dfr_alpr_audio = alpr_hits + audio_hits
