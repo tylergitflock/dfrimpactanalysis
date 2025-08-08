@@ -449,29 +449,33 @@ alpr_sites = alpr_hits = alpr_eta = 0
 audio_sites = audio_hits = audio_eta = 0
 audio_pts   = None
 
-# --- ALPR metrics (filtered in-range) ---
-alpr_sites = alpr_hits = alpr_eta = 0
-if alpr_df is not None:
-    # 1) hit counts (still in col 3)
-    hits = (
-        pd.to_numeric(alpr_df.iloc[:, 3], errors="coerce")
-          .fillna(0)
-          .values
-    )
+# --- ALPR metrics (sites = all in-range; hits/ETA = whitelist in-range) ---
+alpr_sites = alpr_hits = 0
+alpr_eta   = np.nan
+alpr_pts   = pd.DataFrame()
 
-    # 2) reasons (keep as Series so .isin works)
-    reasons = (
-        alpr_df.iloc[:, 8]
-          .astype(str)
-          .str.upper()
-          .str.strip()
-    )
+if alpr_df is not None and not alpr_df.empty:
+    # Columns per new export:
+    # A: Camera Name (idx 0)
+    # D: Reason      (idx 3)
+    # E: Latitude    (idx 4)
+    # F: Longitude   (idx 5)
+    # G: Sum of hits (idx 6)
 
-    # 3) correct lat/lon from cols 1 & 2
-    lat_a = pd.to_numeric(alpr_df.iloc[:, 1], errors="coerce").values
-    lon_a = pd.to_numeric(alpr_df.iloc[:, 2], errors="coerce").values
+    cam_names = alpr_df.iloc[:, 0].astype(str).str.strip()
+    reasons   = alpr_df.iloc[:, 3].astype(str).str.upper().str.strip()
+    lat_a     = pd.to_numeric(alpr_df.iloc[:, 4], errors="coerce").values
+    lon_a     = pd.to_numeric(alpr_df.iloc[:, 5], errors="coerce").values
+    hits      = pd.to_numeric(alpr_df.iloc[:, 6], errors="coerce").fillna(0).values
 
-    # 4) filter by reason list
+    # distance to nearest launch & in-range mask
+    dist = haversine_min(lat_a, lon_a, launch_coords)
+    in_range_mask = (dist <= drone_range) & np.isfinite(dist)
+
+    # 1) SITES: count ALL unique camera names that are in range (no reason filter)
+    alpr_sites = int(pd.Series(cam_names[in_range_mask]).nunique())
+
+    # whitelist for hits / ETA only
     alpr_reason_set = {
         "GANG OR SUSPECTED TERRORIST",
         "MISSING PERSON",
@@ -481,27 +485,22 @@ if alpr_df is not None:
         "STOLEN VEHICLE",
         "VIOLENT PERSON"
     }
-    ok_reason = reasons.isin(alpr_reason_set)
+    ok_reason = pd.Series(reasons).isin(alpr_reason_set).values
+    ok_mask   = in_range_mask & ok_reason
 
-    # 5) compute distance & in-range mask for ALPR
-    dist = haversine_min(lat_a, lon_a, launch_coords)
-    alpr_in_range = (dist <= drone_range) & np.isfinite(dist)
+    # 2) HITS: only whitelisted reasons in range
+    alpr_hits = int(hits[ok_mask].sum())
 
-    # 6) combine reason + range
-    alpr_ok_mask = ok_reason & alpr_in_range
+    # 3) ETA (hits-weighted) for whitelisted, in-range rows
+    etas_sec = dist / max(drone_speed, 1e-9) * 3600
+    denom = hits[ok_mask].sum()
+    alpr_eta = float((etas_sec[ok_mask] * hits[ok_mask]).sum() / denom) if denom > 0 else np.nan
 
-    # 7) aggregate
-    alpr_sites = int(alpr_ok_mask.sum())
-    alpr_hits  = int(hits[alpr_ok_mask].sum())
-
-    # 8) weighted ETA
-    etas = dist / max(drone_speed, 1e-9) * 3600
-    if hits[alpr_ok_mask].sum() > 0:
-        alpr_eta = float((etas[alpr_ok_mask] * hits[alpr_ok_mask]).sum()
-                         / hits[alpr_ok_mask].sum())
-    else:
-        alpr_eta = np.nan
-# ─ end ALPR metrics ─
+    # heatmap points (all valid coords for map, no filters)
+    alpr_pts = pd.DataFrame({
+        "lat": pd.to_numeric(alpr_df.iloc[:, 4], errors="coerce"),
+        "lon": pd.to_numeric(alpr_df.iloc[:, 5], errors="coerce")
+    }).dropna()
 
 # --- Audio metrics (stats only for in-range; heatmap uses ALL valid points) ---
 audio_sites = audio_hits = audio_eta = 0
@@ -861,10 +860,10 @@ render_map(
 
 # ─── 6f) Heatmap: ALPR Locations ─────────────────────────────────────────────
 if alpr_df is not None:
-    # build a DataFrame of all valid ALPR points
+    # build a DataFrame of all valid ALPR points (E=4, F=5 in new export)
     alpr_pts = pd.DataFrame({
-        "lat": pd.to_numeric(alpr_df.iloc[:,1], errors="coerce"),
-        "lon": pd.to_numeric(alpr_df.iloc[:,2], errors="coerce")
+        "lat": pd.to_numeric(alpr_df.iloc[:, 4], errors="coerce"),
+        "lon": pd.to_numeric(alpr_df.iloc[:, 5], errors="coerce")
     }).dropna()
 
     # allow radius/blur tweaks
