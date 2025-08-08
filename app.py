@@ -672,6 +672,86 @@ report_df = pd.DataFrame({
 st.subheader("Report Values")
 st.dataframe(report_df, use_container_width=True)
 
+# ─── AUDIT MODE ─────────────────────────────────────────────────────────────
+with st.sidebar.expander("🔎 Audit Mode", expanded=False):
+    audit_on = st.checkbox("Enable audit diagnostics", value=False)
+
+if audit_on:
+    st.markdown("### Audit — Core Subsets")
+    def n(x): return 0 if x is None else (len(x) if hasattr(x, "__len__") else int(x))
+
+    c1,c2,c3 = st.columns(3)
+    c1.metric("Raw rows (uploaded)", f"{raw_count:,}")
+    c2.metric("df_all (validity filtered)", f"{len(df_all):,}")
+    c3.metric("DFR-eligible (dfr_only)", f"{len(dfr_only):,}")
+
+    c1,c2,c3 = st.columns(3)
+    c1.metric("In-range (<= range mi)", f"{len(in_range):,}")
+    c2.metric("Clearable in-range", f"{len(clearable):,}")
+    c3.metric("Hotspot DFR (≤ 0.5 mi)", f"{hotspot_count:,}")
+
+    st.markdown("### Audit — Audio & ALPR")
+    c1,c2,c3 = st.columns(3)
+    c1.metric("Audio sites (in-range)", f"{audio_sites:,}")
+    c2.metric("Audio hits (in-range)", f"{audio_hits:,}")
+    c3.metric("Audio ETA (mm:ss)", pretty_value(audio_eta, "mmss"))
+
+    c1,c2,c3 = st.columns(3)
+    c1.metric("ALPR sites (in-range)", f"{alpr_sites:,}")
+    c2.metric("ALPR hits (in-range, reason-filtered)", f"{alpr_hits:,}")
+    c3.metric("ALPR ETA (mm:ss)", pretty_value(alpr_eta, "mmss"))
+
+    st.markdown("### Audit — Spot-check filters")
+    st.write("- **DFR map values** (first 15):", list(sorted(dfr_map))[:15])
+    st.write("- **Clearable map values** (first 15):", list(sorted(clr_map))[:15])
+
+    st.markdown("**Examples feeding each metric (first 5 rows)**")
+    st.write("• `in_range` (DFR Responses within Range / first-on-scene / avg drone time):")
+    st.dataframe(in_range[["lat","lon","dist_mi","drone_eta_sec","patrol_sec","call_type_up","priority"]].head())
+
+    st.write("• `clearable` (clearable metrics):")
+    st.dataframe(clearable[["onscene_sec","call_type_up","priority","dist_mi"]].head())
+
+    if audio_pts is not None:
+        st.write("• Audio (raw valid rows used for stats; intensity=Number of Hits):")
+        st.dataframe(audio_pts.head())
+
+    # If your ALPR block created a DataFrame of filtered rows, show it (optional).
+    # Otherwise, show a small sample from the CSV with computed distance.
+    try:
+        # recompute a tiny ALPR preview with distance & reason flag
+        _alat = pd.to_numeric(alpr_df["Latitude"], errors="coerce")
+        _alon = pd.to_numeric(alpr_df["Longitude"], errors="coerce")
+        _hits = pd.to_numeric(alpr_df["Sum"], errors="coerce").fillna(0)
+        _rsn  = alpr_df["Reason"].astype(str).str.upper().str.strip()
+        _valid = _alat.notna() & _alon.notna()
+        _dist  = haversine_min(_alat[_valid].values, _alon[_valid].values, launch_coords)
+        _inrng = (_dist <= drone_range) & np.isfinite(_dist)
+        _dfprev = pd.DataFrame({
+            "lat": _alat[_valid].values,
+            "lon": _alon[_valid].values,
+            "dist_mi": _dist,
+            "hits": _hits[_valid].values,
+            "reason_up": _rsn[_valid].values,
+            "in_range": _inrng,
+            "whitelist_reason": _rsn[_valid].isin({
+                "GANG OR SUSPECTED TERRORIST","MISSING PERSON","HOTLIST HITS",
+                "SEX OFFENDER","STOLEN PLATE","STOLEN VEHICLE","VIOLENT PERSON"
+            }).values
+        }).head(10)
+        st.write("• ALPR preview (distance, in-range, whitelist flags):")
+        st.dataframe(_dfprev)
+    except Exception as _:
+        pass
+
+    st.markdown("### Audit — Key derived values")
+    st.write({
+        "dfr_alpr_audio (in-range hits)": int(dfr_alpr_audio),
+        "Expected CFS Cleared": int(exp_cleared),
+        "Officers (FTE)": officers,
+        "ROI": roi,
+    })
+
 # ─── 5) CSV DOWNLOADS ────────────────────────────────────────────────────────
 st.subheader("ESRI CSV Exports")
 cols = ["lat","lon","patrol_sec","drone_eta_sec","onscene_sec","priority","call_type_up"]
