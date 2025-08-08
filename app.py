@@ -959,14 +959,22 @@ try:
         "app_version": "auto-logger-v1",
     }
 
-    # Package the uploaded files so they’re saved alongside the run
-       input_files_dict = {
-        "raw_calls.csv":          raw_file,
-        "agency_call_types.csv":  ag_file,
-        "launch_locations.csv":   launch_file if 'launch_file' in locals() else None,
-        "alpr.csv":               alpr_file,
-        "audio.csv":              audio_file,
+        # Inputs we’ll save a copy of (so a past run can be replayed)
+    input_files_dict = {
+        "raw_calls.csv": raw_file,
+        "agency_call_types.csv": ag_file,
+        # launch_file may not exist if you used the inline editor — skip if None
+        "launch_locations.csv": launch_file if 'launch_file' in locals() else None,
+        "alpr.csv": alpr_file,
+        "audio.csv": audio_file,
     }
+    # Rewind streams so save_run can read them from the start
+    for _f in list(input_files_dict.values()):
+        if _f is not None and hasattr(_f, "seek"):
+            try:
+                _f.seek(0)
+            except Exception:
+                pass
 
     run_dir = save_run(
         agency_name or "unknown_agency",
