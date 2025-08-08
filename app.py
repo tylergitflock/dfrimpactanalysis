@@ -568,6 +568,9 @@ else:
     # keep previous total display consistent even when no file
     st.sidebar.write("Total unfiltered Audio hits: 0")
 
+# combine for your overall “DFR + ALPR + Audio” metric
+dfr_alpr_audio = alpr_hits + audio_hits
+
 # ─── 4) METRICS & REPORT ─────────────────────────────────────────────────────
 total_cfs   = raw_count
 total_dfr   = len(dfr_only)
