@@ -12,6 +12,7 @@ from streamlit_folium import st_folium
 import folium
 from folium.plugins import HeatMap
 import math
+import tempfile
 
 # ─── Past Runs & Helpers ─────────────────────────────────────────────────────
 import os
