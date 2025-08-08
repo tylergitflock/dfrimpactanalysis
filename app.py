@@ -960,13 +960,13 @@ try:
     }
 
     # Package the uploaded files so they’re saved alongside the run
-   input_files_dict = {
-    "raw_calls.csv":          raw_file,
-    "agency_call_types.csv":  ag_file,
-    "launch_locations.csv":   launch_file if 'launch_file' in locals() else None,
-    "alpr.csv":               alpr_file,
-    "audio.csv":              audio_file,
-}
+       input_files_dict = {
+        "raw_calls.csv":          raw_file,
+        "agency_call_types.csv":  ag_file,
+        "launch_locations.csv":   launch_file if 'launch_file' in locals() else None,
+        "alpr.csv":               alpr_file,
+        "audio.csv":              audio_file,
+    }
 
     run_dir = save_run(
         agency_name or "unknown_agency",
