@@ -430,6 +430,7 @@ st.sidebar.download_button(
 # ─── 2) Launch Locations ────────────────────────────────────────────────────
 st.sidebar.header("2) Launch Locations")
 
+# Decide source: REPLAY > Upload > Editor
 if REPLAY and replay_inputs.get("launch") is not None:
     launch_file = replay_inputs["launch"]
     st.sidebar.success("Loaded launch sites from saved run.")
@@ -440,7 +441,6 @@ else:
         key="launch_csv"
     )
 
-# 2a) Upload a CSV or edit in place:
 if launch_file:
     launch_df = pd.read_csv(launch_file)
 else:
