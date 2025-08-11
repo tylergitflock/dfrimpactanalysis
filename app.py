@@ -479,10 +479,42 @@ to_geocode = launch_df["Address"].notna() & (
     pd.to_numeric(launch_df["Lat"], errors="coerce").isna() |
     pd.to_numeric(launch_df["Lon"], errors="coerce").isna()
 )
+
+# --- Address normalizer ---
+import re
+def normalize_address(addr: str) -> str:
+    """Expand common abbreviations and clean up the address string."""
+    if not isinstance(addr, str):
+        return addr
+
+    replacements = {
+        r"\bSt\b": "Street",
+        r"\bRd\b": "Road",
+        r"\bAve\b": "Avenue",
+        r"\bBlvd\b": "Boulevard",
+        r"\bDr\b": "Drive",
+        r"\bLn\b": "Lane",
+        r"\bHwy\b": "Highway",
+        r"\bPkwy\b": "Parkway",
+        r"\bCt\b": "Court",
+        r"\bPl\b": "Place",
+        r"\bSq\b": "Square",
+    }
+
+    out = addr
+    for pattern, repl in replacements.items():
+        out = re.sub(pattern, repl, out, flags=re.IGNORECASE)
+
+    out = re.sub(r"\b\d{5}(?:-\d{4})?\b", "", out)  # Remove ZIP codes
+    out = re.sub(r"\s+", " ", out).strip()         # Remove extra spaces
+    return out
+# ------------------------------------
+
 for idx in launch_df.loc[to_geocode].index:
-    lat, lon = lookup(launch_df.at[idx, "Address"])
-    launch_df.at[idx, "Lat"]  = lat
-    launch_df.at[idx, "Lon"]  = lon
+    clean_addr = normalize_address(launch_df.at[idx, "Address"])
+    lat, lon = lookup(clean_addr)
+    launch_df.at[idx, "Lat"] = lat
+    launch_df.at[idx, "Lon"] = lon
 
 # show the updated table so you can verify any blanks
 st.sidebar.subheader("Geocoded Launch Locations")
