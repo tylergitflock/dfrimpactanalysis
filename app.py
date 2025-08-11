@@ -589,6 +589,13 @@ with st.sidebar.expander("Agency details", expanded=True):
     run_notes = st.text_area("Run notes (optional)", height=80)
 
 st.sidebar.header("5) ALPR & Audio (optional)")
+# Optional: configure via env var; falls back to placeholder
+ALPR_AUDIO_DB_URL = os.getenv("ALPR_AUDIO_DB_URL", "https://app.sigmacomputing.com/flock-safety/workbook/pdq-request-lpr-gsd-hits-21CqYotoy7AkzXcViUnzmp?:nodeId=UDm7Bv0y6f&:customView=cb177da1-cb59-4e1d-826d-f166721bd4db")
+
+st.sidebar.markdown(
+    f'**Data source:** <a href="{ALPR_AUDIO_DB_URL}" target="_blank">Open ALPR/Audio database ↗</a>',
+    unsafe_allow_html=True
+)
 alpr_file = replay_inputs.get("alpr") or st.sidebar.file_uploader(
     "Upload ALPR Data CSV",
     type=["csv"]
