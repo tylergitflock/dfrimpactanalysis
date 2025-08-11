@@ -91,13 +91,37 @@ def _read_bytes(path):
     with open(path, "rb") as f:
         return BytesIO(f.read())
 
-# --- Load saved input files when replaying ---
-def _read_bytes(path):
-    with open(path, "rb") as f:
-        return BytesIO(f.read())
+# === REPLAY: single canonical loader (PUT THIS ONCE, HERE) ===================
+REPLAY = st.session_state.get("replay_dir")
+replay_cfg = st.session_state.get("replay_config", {})
+replay_inputs = {}
 
 if REPLAY:
     inp_dir = os.path.join(REPLAY, "inputs")
+
+    def _maybe(fname):
+        p = os.path.join(inp_dir, fname)
+        return _read_bytes(p) if os.path.exists(p) else None
+
+    # These names MUST match what save_run() writes into /inputs/
+    replay_inputs = {
+        "raw":    _maybe("raw_calls.csv"),
+        "agency": _maybe("agency_call_types.csv"),
+        "launch": _maybe("launch_locations.csv"),
+        "alpr":   _maybe("alpr.csv"),
+        "audio":  _maybe("audio.csv"),
+    }
+
+    # Optional: tiny debug so you can see what's loaded
+    st.sidebar.caption("Replaying saved inputs…")
+    st.sidebar.code({k: bool(v) for k, v in replay_inputs.items()})
+
+    # One back button for replay mode
+    if st.sidebar.button("⬅️ Back to Start"):
+        for k in ("replay_dir", "replay_config", "viewing_saved"):
+            st.session_state.pop(k, None)
+        st.rerun()
+# ============================================================================ 
 
     def maybe(fname):
         p = os.path.join(inp_dir, fname)
@@ -115,12 +139,6 @@ if REPLAY:
     # Quick debug so you can see what's loaded
     st.sidebar.caption(f"Replay inputs loaded: " +
                        str({k: (v is not None) for k, v in replay_inputs.items()}))
-
-# Optional quick exit from replay mode
-if REPLAY and st.sidebar.button("⬅️ Back to Start"):
-    for k in ("replay_dir", "replay_config", "viewing_saved"):
-        st.session_state.pop(k, None)
-    st.rerun()
 
 # === QUICK VIEW OF A SAVED RUN (no re-run) ==============================
 if st.session_state.get("viewing_saved") and st.session_state.get("loaded_run_dir"):
@@ -168,9 +186,6 @@ if st.session_state.get("viewing_saved") and st.session_state.get("loaded_run_di
     st.stop()  # IMPORTANT: don’t run the rest of the app
 # ========================================================================
 
-if REPLAY:
-    inp_dir = os.path.join(REPLAY, "inputs")
-
     def maybe(path):
         return _read_bytes(path) if os.path.exists(path) else None
 
@@ -181,11 +196,6 @@ if REPLAY:
         "alpr":   maybe(os.path.join(inp_dir, "alpr.csv")),
         "audio":  maybe(os.path.join(inp_dir, "audio.csv")),
     }
-# Optional quick exit from replay mode
-if REPLAY and st.sidebar.button("⬅️ Back to Start"):
-    for k in ("replay_dir", "replay_config", "viewing_saved"):
-        st.session_state.pop(k, None)
-    st.rerun()
 
 # ─── Page Setup ───────────────────────────────────────────────────────────────
 st.set_page_config(page_title="DFR Impact Analysis", layout="wide")
@@ -362,12 +372,18 @@ progress = st.sidebar.progress(0)
 # ─── 1) SIDEBAR: UPLOADS & EDITORS ───────────────────────────────────────────
 st.title("DFR Impact Analysis")
 
+# ─── 1) Raw Call Data ─────────────────────────────────────────────────────
 st.sidebar.header("1) Raw Call Data")
+
 if REPLAY and replay_inputs.get("raw") is not None:
     raw_file = replay_inputs["raw"]
     st.sidebar.success("Loaded raw call data from saved run.")
 else:
-    raw_file = st.sidebar.file_uploader("Upload Raw Call Data CSV", type=["csv"])
+    raw_file = st.sidebar.file_uploader(
+        "Upload Raw Call Data CSV",
+        type=["csv"],
+        key="raw_csv"
+    )
 
 if not raw_file:
     st.sidebar.warning("Please upload Raw Call Data to proceed.")
@@ -414,7 +430,6 @@ st.sidebar.download_button(
 # ─── 2) Launch Locations ────────────────────────────────────────────────────
 st.sidebar.header("2) Launch Locations")
 
-# 2a) Upload a CSV or edit in place:
 if REPLAY and replay_inputs.get("launch") is not None:
     launch_file = replay_inputs["launch"]
     st.sidebar.success("Loaded launch sites from saved run.")
@@ -425,6 +440,7 @@ else:
         key="launch_csv"
     )
 
+# 2a) Upload a CSV or edit in place:
 if launch_file:
     launch_df = pd.read_csv(launch_file)
 else:
@@ -494,15 +510,20 @@ progress.progress(30)
 
 # ─── 3) Agency Call Types ──────────────────────────────────────────────────
 st.sidebar.header("3) Agency Call Types")
+
 if REPLAY and replay_inputs.get("agency") is not None:
     ag_file = replay_inputs["agency"]
     st.sidebar.success("Loaded agency call types from saved run.")
 else:
-    ag_file = st.sidebar.file_uploader("Upload Agency Call Types CSV", type=["csv"], key="agency_csv")
+    ag_file = st.sidebar.file_uploader(
+        "Upload Agency Call Types CSV",
+        type=["csv"],
+        key="agency_csv"
+    )
+
 if not ag_file:
     st.sidebar.error("Please upload your Agency Call Types CSV.")
     st.stop()
-agency_df = pd.read_csv(ag_file)
 
 agency_df = pd.read_csv(ag_file)
 # normalize & preview
@@ -521,7 +542,7 @@ agency_df["Clearable (Y/N)"]    = agency_df["Clearable (Y/N)"].astype(str).str.s
 
 st.sidebar.header("4) Assumptions")
 # Prefer values remembered from replay_config → assumptions
-a = (replay_cfg.get("assumptions", {}) if REPLAY else {})
+a = replay_cfg.get("assumptions", {}) or {}
 fte_hours    = st.sidebar.number_input("Full Time Work Year (hrs)", value=int(a.get("fte_hours", 2080)), step=1)
 officer_cost = st.sidebar.number_input("Officer Cost per FTE ($)", value=int(a.get("officer_cost_usd", 127940)), step=1000, format="%d")
 cancel_rate  = st.sidebar.number_input("Drone Cancellation Rate (0–1)", value=float(a.get("cancel_rate", 0.11)), step=0.01, format="%.2f")
@@ -536,17 +557,19 @@ with st.sidebar.expander("Agency details", expanded=True):
     run_notes = st.text_area("Run notes (optional)", height=80)
 
 st.sidebar.header("5) ALPR & Audio (optional)")
-if REPLAY and replay_inputs.get("alpr") is not None:
-    alpr_file = replay_inputs["alpr"]
+alpr_file = replay_inputs.get("alpr") or st.sidebar.file_uploader(
+    "Upload ALPR Data CSV",
+    type=["csv"]
+)
+if replay_inputs.get("alpr"):
     st.sidebar.success("Loaded ALPR CSV from saved run.")
-else:
-    alpr_file = st.sidebar.file_uploader("Upload ALPR Data CSV", type=["csv"])
 
-if REPLAY and replay_inputs.get("audio") is not None:
-    audio_file = replay_inputs["audio"]
+audio_file = replay_inputs.get("audio") or st.sidebar.file_uploader(
+    "Upload Audio Hits CSV",
+    type=["csv"]
+)
+if replay_inputs.get("audio"):
     st.sidebar.success("Loaded Audio CSV from saved run.")
-else:
-    audio_file = st.sidebar.file_uploader("Upload Audio Hits CSV", type=["csv"])
 
 # ─── 6) Hotspot Area ──────────────────────────────────────────
 st.sidebar.header("6) Hotspot Area")
