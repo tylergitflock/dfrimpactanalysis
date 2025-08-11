@@ -1070,21 +1070,25 @@ try:
     }
 
         # Inputs we’ll save a copy of (so a past run can be replayed)
-    input_files_dict = {
-        "raw_calls.csv": raw_file,
-        "agency_call_types.csv": ag_file,
-        # launch_file may not exist if you used the inline editor — skip if None
-        "launch_locations.csv": launch_file if 'launch_file' in locals() else None,
-        "alpr.csv": alpr_file,
-        "audio.csv": audio_file,
-    }
-    # Rewind streams so save_run can read them from the start
-    for _f in list(input_files_dict.values()):
-        if _f is not None and hasattr(_f, "seek"):
-            try:
-                _f.seek(0)
-            except Exception:
-                pass
+input_files_dict = {
+    "raw_calls.csv": raw_file,
+    "agency_call_types.csv": ag_file,
+    # If no CSV upload for launch sites, save the in-memory DataFrame
+    "launch_locations.csv": (
+        launch_file if 'launch_file' in locals() and launch_file is not None
+        else BytesIO(launch_df.to_csv(index=False).encode("utf-8"))
+    ),
+    "alpr.csv": alpr_file,
+    "audio.csv": audio_file,
+}
+
+# Rewind streams so save_run can read them from the start
+for _f in list(input_files_dict.values()):
+    if _f is not None and hasattr(_f, "seek"):
+        try:
+            _f.seek(0)
+        except Exception:
+            pass
 
     run_dir = save_run(
         agency_name or "unknown_agency",
@@ -1357,10 +1361,9 @@ render_map(
     launch_coords=launch_coords
 )
 
-# 6c) Heatmap: All P1 DFR Calls
-r1, b1 = auto_heat_params(all_p1)
-r_p1 = st.sidebar.slider("P1 DFR Heat Radius", 1, 50, value=r1, key="p1_r")
-b_p1 = st.sidebar.slider("P1 DFR Heat Blur",   1, 50, value=b1, key="p1_b")
+# 6c) Heatmap: All P1 DFR Calls (default radius/blur = 9)
+r_p1 = st.sidebar.slider("P1 DFR Heat Radius", 1, 50, value=9, key="p1_r")
+b_p1 = st.sidebar.slider("P1 DFR Heat Blur",   1, 50, value=9, key="p1_b")
 render_map(
     all_p1,
     heat=True,
