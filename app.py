@@ -1070,25 +1070,25 @@ try:
     }
 
         # Inputs we’ll save a copy of (so a past run can be replayed)
-input_files_dict = {
-    "raw_calls.csv": raw_file,
-    "agency_call_types.csv": ag_file,
-    # If no CSV upload for launch sites, save the in-memory DataFrame
-    "launch_locations.csv": (
-        launch_file if 'launch_file' in locals() and launch_file is not None
-        else BytesIO(launch_df.to_csv(index=False).encode("utf-8"))
-    ),
-    "alpr.csv": alpr_file,
-    "audio.csv": audio_file,
-}
-
-# Rewind streams so save_run can read them from the start
-for _f in list(input_files_dict.values()):
-    if _f is not None and hasattr(_f, "seek"):
-        try:
-            _f.seek(0)
-        except Exception:
-            pass
+    input_files_dict = {
+        "raw_calls.csv": raw_file,
+        "agency_call_types.csv": ag_file,
+        # If no CSV upload for launch sites, save the in-memory DataFrame
+        "launch_locations.csv": (
+            launch_file if 'launch_file' in locals() and launch_file is not None
+            else BytesIO(launch_df.to_csv(index=False).encode("utf-8"))
+        ),
+        "alpr.csv": alpr_file,
+        "audio.csv": audio_file,
+    }
+    
+    # Rewind streams so save_run can read them from the start
+    for _f in list(input_files_dict.values()):
+        if _f is not None and hasattr(_f, "seek"):
+            try:
+                _f.seek(0)
+            except Exception:
+                pass
 
     run_dir = save_run(
         agency_name or "unknown_agency",
