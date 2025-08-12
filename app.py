@@ -439,14 +439,14 @@ if bundle_zip_file is not None:
 # Ensure bundle_pick exists even if no ZIP parsing happens
 bundle_pick = {"raw": None, "agency": None, "launch": None, "alpr": None, "audio": None}
 
-    # Auto-populate replay_inputs so the existing sections pick them up
-    replay_inputs["raw"]    = _find_csv_by_partial("Raw Call Data")
-    replay_inputs["agency"] = _find_csv_by_partial("Agency Call Types")
-    replay_inputs["launch"] = _find_csv_by_partial("Launch Locations")
-    replay_inputs["alpr"]   = _find_csv_by_partial("LPR Hits by Camera")
-    replay_inputs["audio"]  = _find_csv_by_partial("Audio Hits Aggregated")
+# Auto-populate replay_inputs so the existing sections pick them up
+replay_inputs["raw"]    = _find_csv_by_partial("Raw Call Data")
+replay_inputs["agency"] = _find_csv_by_partial("Agency Call Types")
+replay_inputs["launch"] = _find_csv_by_partial("Launch Locations")
+replay_inputs["alpr"]   = _find_csv_by_partial("LPR Hits by Camera")
+replay_inputs["audio"]  = _find_csv_by_partial("Audio Hits Aggregated")
 
-    st.sidebar.success("ZIP file processed — files loaded into their sections below.")
+st.sidebar.success("ZIP file processed — files loaded into their sections below.")
 
 # ─── 1) SIDEBAR: UPLOADS & EDITORS ───────────────────────────────────────────
 st.title("DFR Impact Analysis")
