@@ -1227,7 +1227,7 @@ try:
         "audio.csv": audio_file,
     }
     if bundle_zip is not None:
-    input_files_dict["bundle.zip"] = bundle_zip
+        input_files_dict["bundle.zip"] = bundle_zip
     
     # Rewind streams so save_run can read them from the start
     for _f in list(input_files_dict.values()):
