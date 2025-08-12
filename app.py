@@ -440,7 +440,7 @@ st.sidebar.download_button(
 # ─── 2) Launch Locations ────────────────────────────────────────────────────
 st.sidebar.header("2) Launch Locations")
 
-# Source priority: REPLAY → ZIP bundle → manual upload → inline editor
+# Source priority: REPLAY → manual upload → inline editor
 launch_src = None
 launch_file = None
 
@@ -449,36 +449,57 @@ if replay_inputs.get("launch"):
     launch_src = "replay"
 else:
     launch_file = st.sidebar.file_uploader(
-        "Upload Launch Locations CSV (with any of: Name, Address, Lat, Lon)",
+        "Upload Launch Locations CSV (with any of: Name, Address, Lat, Lon, Type)",
         type=["csv"],
         key="launch_csv"
     )
     launch_src = "upload" if launch_file else None
-    
+
 if launch_file is not None:
-    if launch_src == "replay":
-        st.sidebar.success("Loaded launch sites from saved run.")
-    else:
-        st.sidebar.info("Using uploaded launch locations file.")
+    st.sidebar.success("Loaded launch locations from saved run." if launch_src=="replay"
+                       else "Using uploaded launch locations file.")
     launch_df = pd.read_csv(launch_file)
 else:
     if _EDITOR is None:
         st.sidebar.error("Upgrade Streamlit or upload a CSV with launch locations.")
         st.stop()
     launch_df = _EDITOR(
-        pd.DataFrame(columns=["Location Name","Address","Lat","Lon"]),
+        pd.DataFrame(columns=["Location Name","Address","Lat","Lon","Type"]),
         num_rows="dynamic",
         use_container_width=True,
         key="launch_editor"
     )
 
-# 2b) Normalize column names and ensure all four exist
+# 2b) Normalize headers and make sure required columns exist
 launch_df.columns = [c.strip() for c in launch_df.columns]
-for col in ["Location Name","Address","Lat","Lon"]:
-    if col not in launch_df:
+
+# Accept common synonyms
+if "Location Name" not in launch_df.columns and "Locations" in launch_df.columns:
+    launch_df.rename(columns={"Locations": "Location Name"}, inplace=True)
+if "Lon" not in launch_df.columns and "Long" in launch_df.columns:
+    launch_df.rename(columns={"Long": "Lon"}, inplace=True)
+
+for col in ["Location Name","Address","Lat","Lon","Type"]:
+    if col not in launch_df.columns:
         launch_df[col] = ""
 
-# ─── 2c) Geocode any rows with Address but missing Lat/Lon ──────────────────
+# Save column names for later pricing logic
+st.session_state["launch_columns"] = list(launch_df.columns)
+
+# Split rows by Type (case/space tolerant)
+_type = launch_df["Type"].astype(str).str.strip().str.lower()
+is_launch  = _type.eq("launch location")
+is_hotspot = _type.eq("hotspot address")
+
+launch_rows  = launch_df.loc[is_launch].copy()
+hotspot_rows = launch_df.loc[is_hotspot].copy()
+
+# Stash hotspot addresses so Step 6 can prefill the text input
+st.session_state["hotspot_addresses"] = (
+    hotspot_rows["Address"].dropna().astype(str).str.strip().tolist()
+)
+
+# ─── 2c) Geocode: only for LAUNCH rows that have Address but missing Lat/Lon ─
 from geopy.geocoders import Nominatim
 from geopy.extra.rate_limiter import RateLimiter
 
@@ -493,68 +514,57 @@ def lookup(addr):
     except:
         return (None, None)
 
-to_geocode = launch_df["Address"].notna() & (
-    pd.to_numeric(launch_df["Lat"], errors="coerce").isna() |
-    pd.to_numeric(launch_df["Lon"], errors="coerce").isna()
-)
-
-# --- Address normalizer ---
 import re
 def normalize_address(addr: str) -> str:
-    """Expand common abbreviations and clean up the address string."""
     if not isinstance(addr, str):
         return addr
-
     replacements = {
-        r"\bSt\b": "Street",
-        r"\bRd\b": "Road",
-        r"\bAve\b": "Avenue",
-        r"\bBlvd\b": "Boulevard",
-        r"\bDr\b": "Drive",
-        r"\bLn\b": "Lane",
-        r"\bHwy\b": "Highway",
-        r"\bPkwy\b": "Parkway",
-        r"\bCt\b": "Court",
-        r"\bPl\b": "Place",
-        r"\bSq\b": "Square",
+        r"\bSt\b": "Street", r"\bRd\b": "Road", r"\bAve\b": "Avenue",
+        r"\bBlvd\b": "Boulevard", r"\bDr\b": "Drive", r"\bLn\b": "Lane",
+        r"\bHwy\b": "Highway", r"\bPkwy\b": "Parkway", r"\bCt\b": "Court",
+        r"\bPl\b": "Place", r"\bSq\b": "Square",
     }
-
     out = addr
-    for pattern, repl in replacements.items():
-        out = re.sub(pattern, repl, out, flags=re.IGNORECASE)
-
-    out = re.sub(r"\b\d{5}(?:-\d{4})?\b", "", out)  # Remove ZIP codes
-    out = re.sub(r"\s+", " ", out).strip()         # Remove extra spaces
+    for pat, rep in replacements.items():
+        out = re.sub(pat, rep, out, flags=re.IGNORECASE)
+    out = re.sub(r"\b\d{5}(?:-\d{4})?\b", "", out)
+    out = re.sub(r"\s+", " ", out).strip()
     return out
-# ------------------------------------
 
-for idx in launch_df.loc[to_geocode].index:
-    clean_addr = normalize_address(launch_df.at[idx, "Address"])
+to_geocode = launch_rows["Address"].notna() & (
+    pd.to_numeric(launch_rows["Lat"], errors="coerce").isna() |
+    pd.to_numeric(launch_rows["Lon"], errors="coerce").isna()
+)
+
+for idx in launch_rows.loc[to_geocode].index:
+    clean_addr = normalize_address(launch_rows.at[idx, "Address"])
     lat, lon = lookup(clean_addr)
-    launch_df.at[idx, "Lat"] = lat
-    launch_df.at[idx, "Lon"] = lon
+    launch_rows.at[idx, "Lat"] = lat
+    launch_rows.at[idx, "Lon"] = lon
 
-# show the updated table so you can verify any blanks
-st.sidebar.subheader("Geocoded Launch Locations")
-st.sidebar.dataframe(launch_df)
+# Preview (separate views help sanity‑check)
+st.sidebar.subheader("Launch Locations (geocoded)")
+st.sidebar.dataframe(launch_rows[["Location Name","Address","Lat","Lon"]], use_container_width=True)
+if not hotspot_rows.empty:
+    st.sidebar.subheader("Hotspot Addresses (from CSV)")
+    st.sidebar.dataframe(hotspot_rows[["Location Name","Address"]], use_container_width=True)
 
-# 2d) Final validation: every row must now have numeric Lat & Lon
+# 2d) Validation: require coords ONLY for launch rows
 valid_coords = (
-    pd.to_numeric(launch_df["Lat"], errors="coerce").notna() &
-    pd.to_numeric(launch_df["Lon"], errors="coerce").notna()
+    pd.to_numeric(launch_rows["Lat"], errors="coerce").notna() &
+    pd.to_numeric(launch_rows["Lon"], errors="coerce").notna()
 )
 if not valid_coords.all():
-    bad = launch_df.loc[~valid_coords, ["Location Name","Address","Lat","Lon"]]
+    bad = launch_rows.loc[~valid_coords, ["Location Name","Address","Lat","Lon"]]
     st.sidebar.error(
-        "Some rows still lack valid Lat/Lon:\n" +
-        bad.to_csv(index=False)
+        "Some LAUNCH rows lack valid Lat/Lon:\n" + bad.to_csv(index=False)
     )
     st.stop()
 
-# 2e) Convert and store launch_coords for downstream use
-launch_df["Lat"] = pd.to_numeric(launch_df["Lat"], errors="coerce")
-launch_df["Lon"] = pd.to_numeric(launch_df["Lon"], errors="coerce")
-launch_coords   = list(launch_df[["Lat","Lon"]].itertuples(index=False, name=None))
+# 2e) Build launch_coords for downstream use (maps/ETA)
+launch_rows["Lat"] = pd.to_numeric(launch_rows["Lat"], errors="coerce")
+launch_rows["Lon"] = pd.to_numeric(launch_rows["Lon"], errors="coerce")
+launch_coords = list(launch_rows[["Lat","Lon"]].itertuples(index=False, name=None))
 
 progress.progress(30)
 
@@ -661,9 +671,11 @@ if audio_src == "replay":
 # ─── 6) Hotspot Area ──────────────────────────────────────────
 st.sidebar.header("6) Hotspot Area")
 
-# 1) Address input
+# 1) Address input, prefilled from CSV if available
+default_hotspot = (st.session_state.get("hotspot_addresses") or [None])[0]
 hotspot_address = st.sidebar.text_input(
     "Enter Hotspot Address (0.5 mi radius)",
+    value=default_hotspot if default_hotspot else "",
     help="e.g. “123 Main St, Anytown, USA”"
 )
 
