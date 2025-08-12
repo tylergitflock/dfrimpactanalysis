@@ -184,24 +184,6 @@ if REPLAY:
         for k in ("replay_dir", "replay_config", "viewing_saved"):
             st.session_state.pop(k, None)
         st.rerun()
-# ============================================================================ 
-
-    def maybe(fname):
-        p = os.path.join(inp_dir, fname)
-        return _read_bytes(p) if os.path.exists(p) else None
-
-    # These names must match what save_run() wrote
-    replay_inputs = {
-        "raw":    maybe("raw_calls.csv"),
-        "agency": maybe("agency_call_types.csv"),
-        "launch": maybe("launch_locations.csv"),
-        "alpr":   maybe("alpr.csv"),
-        "audio":  maybe("audio.csv"),
-    }
-
-    # Quick debug so you can see what's loaded
-    st.sidebar.caption(f"Replay inputs loaded: " +
-                       str({k: (v is not None) for k, v in replay_inputs.items()}))
 
 # === QUICK VIEW OF A SAVED RUN (no re-run) ==============================
 if st.session_state.get("viewing_saved") and st.session_state.get("loaded_run_dir"):
@@ -454,6 +436,9 @@ if bundle_zip_file is not None:
                 return BytesIO(zip_files[name])
         return None
 
+# Ensure bundle_pick exists even if no ZIP parsing happens
+bundle_pick = {"raw": None, "agency": None, "launch": None, "alpr": None, "audio": None}
+
     # Auto-populate replay_inputs so the existing sections pick them up
     replay_inputs["raw"]    = _find_csv_by_partial("Raw Call Data")
     replay_inputs["agency"] = _find_csv_by_partial("Agency Call Types")
@@ -465,11 +450,6 @@ if bundle_zip_file is not None:
 
 # ─── 1) SIDEBAR: UPLOADS & EDITORS ───────────────────────────────────────────
 st.title("DFR Impact Analysis")
-
-# Optional: one ZIP that contains all the CSVs
-st.sidebar.subheader("0) Bundle (optional)")
-bundle_zip = st.sidebar.file_uploader("📦 Upload ZIP with all CSVs", type=["zip"], key="bundle_zip")
-bundle_pick = _pick_from_zip(bundle_zip) if bundle_zip else {"raw": None, "agency": None, "launch": None, "alpr": None, "audio": None}
 
 # RAW
 st.sidebar.header("1) Raw Call Data")
@@ -1246,8 +1226,6 @@ try:
     # If a ZIP was uploaded, save it as well for replay
     if bundle_zip_file is not None:
         input_files_dict["bundle.zip"] = bundle_zip_file
-    if bundle_zip is not None:
-        input_files_dict["bundle.zip"] = bundle_zip
     
     # Rewind streams so save_run can read them from the start
     for _f in list(input_files_dict.values()):
