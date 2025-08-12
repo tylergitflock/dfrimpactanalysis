@@ -462,7 +462,6 @@ st.title("DFR Impact Analysis")
 st.sidebar.header("1) Raw Call Data")
 raw_file = (
     replay_inputs.get("raw") or
-    bundle_pick.get("raw") or
     st.sidebar.file_uploader("Upload Raw Call Data CSV", type=["csv"], key="raw_csv")
 )
 
