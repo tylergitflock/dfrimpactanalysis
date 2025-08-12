@@ -418,28 +418,35 @@ progress = st.sidebar.progress(0)
 import zipfile
 from io import BytesIO
 
+# 0a) Helper exists ALWAYS (even if no ZIP uploaded)
+def _find_csv_by_partial(partial: str):
+    """Return BytesIO of a CSV from an uploaded ZIP by partial filename match."""
+    files = st.session_state.get("zip_files")
+    if not files:
+        return None
+    for name, data in files.items():
+        if partial.lower() in name.lower():
+            return BytesIO(data)
+    return None
+
 st.sidebar.header("0) Bulk ZIP Upload (optional)")
 bundle_zip_file = st.sidebar.file_uploader(
     "Upload ZIP containing all CSV files (optional)",
     type=["zip"],
-    key="bundle_zip"
+    key="bundle_zip"   # make sure this key is used ONLY here in the app
 )
 
+# 0b) If a ZIP is uploaded, cache its CSV bytes in session_state
 if bundle_zip_file is not None:
-    with zipfile.ZipFile(bundle_zip_file, 'r') as zf:
-        # Extract all CSVs in memory
-        zip_files = {name: zf.read(name) for name in zf.namelist() if name.lower().endswith('.csv')}
+    with zipfile.ZipFile(bundle_zip_file, "r") as zf:
+        st.session_state["zip_files"] = {
+            name: zf.read(name)
+            for name in zf.namelist()
+            if name.lower().endswith(".csv")
+        }
+    st.sidebar.success("ZIP file processed — files loaded into their sections below.")
 
-    def _find_csv_by_partial(partial):
-        for name in zip_files:
-            if partial.lower() in name.lower():
-                return BytesIO(zip_files[name])
-        return None
-
-# Ensure bundle_pick exists even if no ZIP parsing happens
-bundle_pick = {"raw": None, "agency": None, "launch": None, "alpr": None, "audio": None}
-
-# Auto-populate replay_inputs so the existing sections pick them up
+# 0c) Pre-populate replay_inputs from ZIP (no-ops if no ZIP)
 replay_inputs["raw"]    = _find_csv_by_partial("Raw Call Data")
 replay_inputs["agency"] = _find_csv_by_partial("Agency Call Types")
 replay_inputs["launch"] = _find_csv_by_partial("Launch Locations")
