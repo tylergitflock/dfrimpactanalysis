@@ -92,67 +92,6 @@ def _read_bytes(path):
     with open(path, "rb") as f:
         return BytesIO(f.read())
 
-# === ZIP bundle helper =======================================================
-def _pick_from_zip(uploaded_zip):
-    """
-    Given a Streamlit UploadedFile (ZIP), return a dict of BytesIO CSVs keyed by:
-    raw, agency, launch, alpr, audio. Missing items will be None.
-    Also prefers filename prefixes:
-      - ALPR:  "LPR Hits by Camera..."
-      - Audio: "Audio Hits Aggregated..."
-    """
-    out = {"raw": None, "agency": None, "launch": None, "alpr": None, "audio": None}
-    if uploaded_zip is None:
-        return out
-
-    try:
-        with zipfile.ZipFile(uploaded_zip) as z:
-            names = [n for n in z.namelist() if n.lower().endswith(".csv") and not n.endswith("/")]
-            st.sidebar.caption("ZIP contents (CSV):")
-            st.sidebar.code(names)
-            # map of lowercased *base name* to full zip path
-            base_map = {n.split("/")[-1].lower(): n for n in names}
-
-            def _by_prefix(prefixes):
-                for base, full in base_map.items():
-                    if any(base.startswith(p) for p in prefixes):
-                        return BytesIO(z.read(full))
-                return None
-
-            # Prefer explicit prefixes first
-            alpr_pref  = _by_prefix(["lpr hits by camera"])
-            audio_pref = _by_prefix(["audio hits aggregated"])
-
-            # Generic regex fallback (your existing patterns), in case filenames differ
-            lower_map = {b: base_map[b] for b in base_map}  # keep a lower dict for regex pass
-            def grab(patterns):
-                for pat in patterns:
-                    rx = re.compile(pat, re.IGNORECASE)
-                    for base, full in lower_map.items():
-                        if rx.search(base):
-                            return BytesIO(z.read(full))
-                return None
-
-            out["raw"]    = grab([r"^raw\s*call\s*data(\s*-\s*.+)?\.csv$"])
-            out["agency"] = grab([r"^agency\s*call\s*types(\s*-\s*.+)?\.csv$"])
-            out["launch"] = grab([r"^launch\s*locations(\s*-\s*.+)?\.csv$"])
-
-            # Use preferred picks if found, else fall back
-            out["alpr"] = alpr_pref or grab([
-                r"^lpr\s*hits\s*by\s*camera.*\.csv$",
-                r"^(alpr|lpr)(\s*-\s*.+)?\.csv$",
-            ])
-
-            out["audio"] = audio_pref or grab([
-                r"^audio\s*hits\s*aggregated.*\.csv$",
-                r"^(audio|gunshot|shot\s*spotter|shotspotter)(\s*hits|\s*events)?.*\.csv$",
-            ])
-
-    except Exception:
-        pass
-
-    return out
-# ============================================================================
 
 # === REPLAY: single canonical loader (PUT THIS ONCE, HERE) ===================
 REPLAY = st.session_state.get("replay_dir")
@@ -229,18 +168,6 @@ if st.session_state.get("viewing_saved") and st.session_state.get("loaded_run_di
             st.experimental_rerun()
 
     st.stop()  # IMPORTANT: don’t run the rest of the app
-# ========================================================================
-
-    def maybe(path):
-        return _read_bytes(path) if os.path.exists(path) else None
-
-    replay_inputs = {
-        "raw":    maybe(os.path.join(inp_dir, "raw_calls.csv")),
-        "agency": maybe(os.path.join(inp_dir, "agency_call_types.csv")),
-        "launch": maybe(os.path.join(inp_dir, "launch_locations.csv")),
-        "alpr":   maybe(os.path.join(inp_dir, "alpr.csv")),
-        "audio":  maybe(os.path.join(inp_dir, "audio.csv")),
-    }
 
 # ─── Page Setup ───────────────────────────────────────────────────────────────
 st.set_page_config(page_title="DFR Impact Analysis", layout="wide")
@@ -453,8 +380,6 @@ replay_inputs["launch"] = _find_csv_by_partial("Launch Locations")
 replay_inputs["alpr"]   = _find_csv_by_partial("LPR Hits by Camera")
 replay_inputs["audio"]  = _find_csv_by_partial("Audio Hits Aggregated")
 
-st.sidebar.success("ZIP file processed — files loaded into their sections below.")
-
 # ─── 1) SIDEBAR: UPLOADS & EDITORS ───────────────────────────────────────────
 st.title("DFR Impact Analysis")
 
@@ -466,7 +391,9 @@ raw_file = (
 )
 
 if not raw_file:
-    if bundle_zip and bundle_pick and all(v is None for v in bundle_pick.values()):
+    zip_loaded  = bool(st.session_state.get("zip_files"))
+    zip_matched = any(replay_inputs.get(k) is not None for k in ["raw","agency","launch","alpr","audio"])
+    if zip_loaded and not zip_matched:
         st.sidebar.error("ZIP uploaded, but no expected CSVs were recognized. Check filenames. See ZIP contents above.")
     else:
         st.sidebar.warning("Please upload Raw Call Data to proceed.")
@@ -520,9 +447,6 @@ launch_file = None
 if replay_inputs.get("launch"):
     launch_file = replay_inputs["launch"]
     launch_src = "replay"
-elif "bundle_pick" in globals() and bundle_pick.get("launch"):
-    launch_file = bundle_pick["launch"]
-    launch_src = "bundle"
 else:
     launch_file = st.sidebar.file_uploader(
         "Upload Launch Locations CSV (with any of: Name, Address, Lat, Lon)",
@@ -530,12 +454,10 @@ else:
         key="launch_csv"
     )
     launch_src = "upload" if launch_file else None
-
+    
 if launch_file is not None:
     if launch_src == "replay":
         st.sidebar.success("Loaded launch sites from saved run.")
-    elif launch_src == "bundle":
-        st.sidebar.success("Loaded launch sites from ZIP bundle.")
     else:
         st.sidebar.info("Using uploaded launch locations file.")
     launch_df = pd.read_csv(launch_file)
@@ -646,9 +568,6 @@ ag_file = None
 if replay_inputs.get("agency"):
     ag_file = replay_inputs["agency"]
     ag_src = "replay"
-elif "bundle_pick" in globals() and bundle_pick.get("agency"):
-    ag_file = bundle_pick["agency"]
-    ag_src = "bundle"
 else:
     ag_file = st.sidebar.file_uploader(
         "Upload Agency Call Types CSV",
@@ -663,8 +582,6 @@ if not ag_file:
 
 if ag_src == "replay":
     st.sidebar.success("Loaded agency call types from saved run.")
-elif ag_src == "bundle":
-    st.sidebar.success("Loaded agency call types from ZIP bundle.")
 else:
     st.sidebar.info("Using uploaded agency call types file.")
 
@@ -720,17 +637,12 @@ alpr_file = None
 if replay_inputs.get("alpr"):
     alpr_file = replay_inputs["alpr"]
     alpr_src = "replay"
-elif "bundle_pick" in globals() and bundle_pick.get("alpr"):
-    alpr_file = bundle_pick["alpr"]
-    alpr_src = "bundle"
 else:
     alpr_file = st.sidebar.file_uploader("Upload ALPR Data CSV", type=["csv"])
     alpr_src = "upload" if alpr_file else None
 
 if alpr_src == "replay":
     st.sidebar.success("Loaded ALPR CSV from saved run.")
-elif alpr_src == "bundle":
-    st.sidebar.success("Loaded ALPR CSV from ZIP bundle.")
 
 # === Audio ===
 audio_src = None
@@ -739,17 +651,13 @@ audio_file = None
 if replay_inputs.get("audio"):
     audio_file = replay_inputs["audio"]
     audio_src = "replay"
-elif "bundle_pick" in globals() and bundle_pick.get("audio"):
-    audio_file = bundle_pick["audio"]
-    audio_src = "bundle"
 else:
     audio_file = st.sidebar.file_uploader("Upload Audio Hits CSV", type=["csv"])
     audio_src = "upload" if audio_file else None
 
 if audio_src == "replay":
     st.sidebar.success("Loaded Audio CSV from saved run.")
-elif audio_src == "bundle":
-    st.sidebar.success("Loaded Audio CSV from ZIP bundle.")
+
 # ─── 6) Hotspot Area ──────────────────────────────────────────
 st.sidebar.header("6) Hotspot Area")
 
