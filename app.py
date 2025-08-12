@@ -432,6 +432,37 @@ st.sidebar.write("DEBUG state:", dict(st.session_state))
 # ─── 0) PROGRESS BAR ──────────────────────────────────────────────────────────
 progress = st.sidebar.progress(0)
 
+# ─── 0) Optional ZIP Upload (Pre-populates other sections) ───────────────────
+import zipfile
+from io import BytesIO
+
+st.sidebar.header("0) Bulk ZIP Upload (optional)")
+bundle_zip_file = st.sidebar.file_uploader(
+    "Upload ZIP containing all CSV files (optional)",
+    type=["zip"],
+    key="bundle_zip"
+)
+
+if bundle_zip_file is not None:
+    with zipfile.ZipFile(bundle_zip_file, 'r') as zf:
+        # Extract all CSVs in memory
+        zip_files = {name: zf.read(name) for name in zf.namelist() if name.lower().endswith('.csv')}
+
+    def _find_csv_by_partial(partial):
+        for name in zip_files:
+            if partial.lower() in name.lower():
+                return BytesIO(zip_files[name])
+        return None
+
+    # Auto-populate replay_inputs so the existing sections pick them up
+    replay_inputs["raw"]    = _find_csv_by_partial("Raw Call Data")
+    replay_inputs["agency"] = _find_csv_by_partial("Agency Call Types")
+    replay_inputs["launch"] = _find_csv_by_partial("Launch Locations")
+    replay_inputs["alpr"]   = _find_csv_by_partial("LPR Hits by Camera")
+    replay_inputs["audio"]  = _find_csv_by_partial("Audio Hits Aggregated")
+
+    st.sidebar.success("ZIP file processed — files loaded into their sections below.")
+
 # ─── 1) SIDEBAR: UPLOADS & EDITORS ───────────────────────────────────────────
 st.title("DFR Impact Analysis")
 
@@ -1199,7 +1230,7 @@ try:
         "app_version": "auto-logger-v1",
     }
 
-        # Inputs we’ll save a copy of (so a past run can be replayed)
+    # Inputs we’ll save a copy of (so a past run can be replayed)
     input_files_dict = {
         "raw_calls.csv": raw_file,
         "agency_call_types.csv": ag_file,
@@ -1211,6 +1242,10 @@ try:
         "alpr.csv": alpr_file,
         "audio.csv": audio_file,
     }
+
+    # If a ZIP was uploaded, save it as well for replay
+    if bundle_zip_file is not None:
+        input_files_dict["bundle.zip"] = bundle_zip_file
     if bundle_zip is not None:
         input_files_dict["bundle.zip"] = bundle_zip
     
