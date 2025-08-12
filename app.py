@@ -108,6 +108,8 @@ def _pick_from_zip(uploaded_zip):
     try:
         with zipfile.ZipFile(uploaded_zip) as z:
             names = [n for n in z.namelist() if n.lower().endswith(".csv") and not n.endswith("/")]
+            st.sidebar.caption("ZIP contents (CSV):")
+            st.sidebar.code(names)
             # map of lowercased *base name* to full zip path
             base_map = {n.split("/")[-1].lower(): n for n in names}
 
@@ -447,27 +449,10 @@ raw_file = (
 )
 
 if not raw_file:
-    st.sidebar.warning("Please upload Raw Call Data to proceed.")
-    st.stop()
-
-raw_df = pd.read_csv(raw_file)
-raw_df_orig = raw_df.copy()
-
-# ─── 1) Raw Call Data ─────────────────────────────────────────────────────
-st.sidebar.header("1) Raw Call Data")
-
-if REPLAY and replay_inputs.get("raw") is not None:
-    raw_file = replay_inputs["raw"]
-    st.sidebar.success("Loaded raw call data from saved run.")
-else:
-    raw_file = st.sidebar.file_uploader(
-        "Upload Raw Call Data CSV",
-        type=["csv"],
-        key="raw_csv"
-    )
-
-if not raw_file:
-    st.sidebar.warning("Please upload Raw Call Data to proceed.")
+    if bundle_zip and bundle_pick and all(v is None for v in bundle_pick.values()):
+        st.sidebar.error("ZIP uploaded, but no expected CSVs were recognized. Check filenames. See ZIP contents above.")
+    else:
+        st.sidebar.warning("Please upload Raw Call Data to proceed.")
     st.stop()
 
 raw_df = pd.read_csv(raw_file)
