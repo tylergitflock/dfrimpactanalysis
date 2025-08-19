@@ -2103,25 +2103,29 @@ def panel(title, product_names_list, is_left=True, competitor=None):
 
         # Headline stats row
         c1, c2, c3 = st.columns(3)
-        c1.metric("Launch Locations", f"{launch_count:,}")
-        c2.metric("Total Docks", f"{total_docks:,}")
-
         if is_left:
-            # Aerodome pricing with discount display rule
+            # Our (Aerodome) metrics
+            c1.metric("Launch Locations", f"{launch_count:,}")
+            c2.metric("Total Docks", f"{total_docks:,}")
             if disc_fraction > 0 and our_discounted is not None:
                 c3.metric("Yearly Cost (discounted)", f"${our_discounted:,}")
                 st.caption(f"Base price (pre-discount): ${our_base:,}")
             else:
                 c3.metric("Yearly Cost", f"${our_base:,}")
         else:
-            # Competitor computed locations & yearly cost
+            # Competitor metrics
             plan = competitor_plan(competitor, TARGET_AREA_SQMI)
+            comp_docks_per_loc = PLATFORMS[competitor]["docks_per_location"]
+            required_locs = plan["locations"]
+            total_comp_docks = required_locs * comp_docks_per_loc
+        
+            c1.metric("Required Locations", f"{required_locs:,}")
+            c2.metric("Total Docks", f"{total_comp_docks:,}")
             c3.metric("Yearly Cost", f"${plan['yearly_cost']:,}")
-            c1.metric("Estimated Locations", f"{plan['locations']:,}")
-            # Replace c2 to show per-site dock config for competitor
-            c2.metric("Docks per Location", str(PLATFORMS[competitor]["docks_per_location"]))
+        
             st.caption(
-                f"Per-location area: {plan['per_location_area_sqmi']:.2f} sq mi; "
+                f"Docks per location: {comp_docks_per_loc} • "
+                f"Per-location area: {plan['per_location_area_sqmi']:.2f} sq mi • "
                 f"Price/dock: ${plan['price_per_dock']:,}"
             )
 
