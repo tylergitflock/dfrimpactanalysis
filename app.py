@@ -1749,8 +1749,20 @@ with st.expander("Per-site pricing details"):
 st.markdown("---")
 st.header("Comparison")
 
-# Hardcoded specs (exact spellings & full integrations)
-SPECS = {
+# --- Hardcoded specs/pricing (metrics = rows, products = columns) -----------
+SPEC_ROWS_ORDER = [
+    "Pricing / Dock / Year (2-Year Contract)",
+    "Number of Docks / Location",
+    "Real-world Speed (MPH)",
+    "Response Time (1 Mile) (sec)",
+    "Real-world On-scene Time (min)",
+    "Hit License Plate at 400ft Alt",
+    "Effectively Fly at 400ft Alt",
+    "Night Vision",
+    "Integrations",
+]
+
+SPEC_DATA = {
     "Flock Aerodome M350": {
         "Pricing / Dock / Year (2-Year Contract)": "$150,000",
         "Number of Docks / Location": "1",
@@ -1841,122 +1853,154 @@ SPECS = {
     },
 }
 
-# Detect Aerodome dock types from Launch CSV (default to Dock 3 if blank)
-def _series_or_empty(s):
-    return s if s is not None else pd.Series(dtype=object)
+# Convert to DataFrame shaped like earlier (products as index, metrics as columns)
+specs_tidy = pd.DataFrame(SPEC_DATA).T
 
-# Ensure we have the Dock Type column
-if "Dock Type" in launch_df.columns:
-    dock_type_col = launch_df["Dock Type"]
+# --- Pricing constants (yearly, no CAPEX) -----------------------------------
+DOCK_PRICES = {
+    "Dock 3": 50000,
+    "Alpha": 125000,
+    "Delta": 300000,
+    "M350": 150000,
+}
+RADAR_PRICE = 150000
+
+# Helper to fetch columns from Launch Locations (case/space tolerant)
+def _get_col(df, *names):
+    cmap = {c.lower().strip(): c for c in df.columns}
+    for n in names:
+        key = n.lower().strip()
+        if key in cmap:
+            return df[cmap[key]]
+    return None
+
+# Read counts from your already-built launch_rows
+dock_type_series = _get_col(launch_rows, "Dock Type", "Drone Type", "Dock Type or Drone Type")
+docks_col       = _get_col(launch_rows, "Number of Docks")
+radars_col      = _get_col(launch_rows, "Number of Radar")
+
+# Normalize dock types, defaulting blanks/missing to Dock 3
+if dock_type_series is None or dock_type_series.empty:
+    dock_vals_norm = pd.Series(["Dock 3"] * len(launch_rows))
 else:
-    dock_type_col = pd.Series(dtype=object)  # empty fallback
+    dock_vals_norm = (
+        dock_type_series.astype(str)
+        .str.strip()
+        .replace("", "Dock 3")
+        .str.replace("Flock Aerodome ", "", regex=False)
+        .str.title()
+    )
+    # anything outside known set -> Dock 3
+    dock_vals_norm = dock_vals_norm.where(dock_vals_norm.isin(["Dock 3","Alpha","Delta","M350"]), "Dock 3")
 
-dock_vals_raw = _series_or_empty(dock_type_col).astype(str).str.strip()
-dock_vals_norm = (
-    dock_vals_raw
-    .replace("", "Dock 3")                                   # default if blank
-    .str.replace("Flock Aerodome ", "", regex=False)         # strip prefix
-    .str.title()
-)
-detected_types = sorted([t for t in dock_vals_norm.dropna().unique().tolist() if t])
+detected_types = sorted(dock_vals_norm.dropna().unique().tolist()) if len(launch_rows) else ["Dock 3"]
 
-dock_vals_raw = _series_or_empty(dock_type_col).astype(str).str.strip()
-dock_vals_norm = (
-    dock_vals_raw
-    .replace("", "Dock 3")                                   # default if blank
-    .str.replace("Flock Aerodome ", "", regex=False)         # strip prefix
-    .str.title()
-)
-detected_types = sorted([t for t in dock_vals_norm.dropna().unique().tolist() if t])
+launch_count = int(len(launch_rows))
+total_docks  = int(pd.to_numeric(docks_col, errors="coerce").fillna(0).sum()) if docks_col is not None else 0
+total_radars = int(pd.to_numeric(radars_col, errors="coerce").fillna(0).sum()) if radars_col is not None else 0
 
-# Left panel title
-if len(detected_types) == 0:
-    aerodome_title = "Flock Aerodome – Dock 3"
-    detected_types = ["Dock 3"]
-elif len(detected_types) == 1:
-    aerodome_title = f"Flock Aerodome – {detected_types[0]}"
-else:
-    aerodome_title = "Flock Aerodome – Multi-platform"
+# Per-row dock price (based on each row's normalized dock type)
+def _dock_price_for_row(idx):
+    try:
+        dt = dock_vals_norm.iloc[idx] if idx < len(dock_vals_norm) else "Dock 3"
+        return DOCK_PRICES.get(str(dt), 0)
+    except Exception:
+        return DOCK_PRICES.get("Dock 3", 0)
 
-# Competitor dropdown (non-Flock only)
+# Yearly pricing calc (base + optional discount)
+def compute_yearly_price(disc_pct: float = 0.0):
+    if launch_rows.empty:
+        base = 0
+    else:
+        _docks  = pd.to_numeric(docks_col, errors="coerce").fillna(0) if docks_col is not None else pd.Series([0]*len(launch_rows))
+        _radars = pd.to_numeric(radars_col, errors="coerce").fillna(0) if radars_col is not None else pd.Series([0]*len(launch_rows))
+        row_prices = pd.Series([_dock_price_for_row(i) for i in range(len(launch_rows))], index=launch_rows.index)
+        base = int((_docks * row_prices).sum() + (_radars * RADAR_PRICE).sum())
+    disc = float(disc_pct or 0.0)
+    disc_total = int(round(base * (1.0 - disc))) if disc > 0 else None
+    return base, disc_total
+
+# Discount control (independent here; only shows discounted line if >0)
+c_disc1, _ = st.columns([1,3])
+with c_disc1:
+    discount_pct_input_cmp = st.number_input("Discount (%)", min_value=0, max_value=100, value=0, step=1, key="cmp_discount")
+discount_fraction_cmp = float(discount_pct_input_cmp) / 100.0
+
+base_total_cmp, discounted_total_cmp = compute_yearly_price(discount_fraction_cmp)
+
+# Competitor selection (hard-coded list)
 competitor_options = ["Skydio X10", "Brinc Responder", "Paladin Dock 3", "Dronesense Dock 3"]
 comp_choice = st.selectbox("Compare against", competitor_options, index=0)
 
-# Helpers to parse numeric values from SPECS
-def _price_per_dock(product):
-    txt = SPECS.get(product, {}).get("Pricing / Dock / Year (2-Year Contract)", "$0").replace("$", "").replace(",", "").strip()
-    try:
-        return int(float(txt))
-    except Exception:
-        return 0
+# Build Aerodome title based on detected types
+if len(detected_types) == 1:
+    aerodome_variant = detected_types[0]
+    aerodome_title = f"Flock Aerodome – {aerodome_variant}"
+    # pick a matching spec card to show under the map (for clarity)
+    our_product_for_specs = f"Flock Aerodome {aerodome_variant}"
+else:
+    aerodome_title = "Flock Aerodome – Multi-platform"
+    # If multiple, pick the first detected that we have a card for, else default to Delta (for the spec list only)
+    _candidates = [f"Flock Aerodome {t}" for t in detected_types]
+    our_product_for_specs = next((c for c in _candidates if c in specs_tidy.index), "Flock Aerodome Delta")
 
-def _docks_per_location(product):
-    txt = SPECS.get(product, {}).get("Number of Docks / Location", "0").strip()
-    try:
-        return int(float(txt))
-    except Exception:
-        return 0
-
-# Panel rendering
-def panel(title, aerodome_types_or_product, is_left=True):
+# --- Panel renderer ----------------------------------------------------------
+def panel(title, product_key_for_specs, launches, docks, base_price, disc_price, is_left=True):
     with st.container(border=True):
         st.subheader(title)
 
-        # Map placeholder
+        # Map (placeholder): reuse your in-range heat + range circle
         render_map(
             all_dfr,
             heat=True,
             heat_radius=8, heat_blur=12,
-            key=f"cmp_map_{'L' if is_left else 'R'}_{title}",
+            title="",
+            key=f"cmp_map_{'L' if is_left else 'R'}_{uuid.uuid4().hex[:6]}",
             show_circle=True,
             launch_coords=launch_coords
         )
 
         # Headline stats
         c1, c2, c3 = st.columns(3)
-        c1.metric("Launch Locations", f"{launch_count:,}")
-        c2.metric("Total Docks", f"{total_docks:,}")
-
-        if is_left:
-            # Our price uses previously computed totals (with discount if any)
-            if discount_fraction > 0 and discounted_total is not None:
-                c3.metric("Yearly Cost (discounted)", f"${discounted_total:,}")
-                st.caption(f"Base price (pre-discount): ${base_total:,}")
-            else:
-                c3.metric("Yearly Cost", f"${base_total:,}")
+        c1.metric("Launch Locations", f"{launches:,}")
+        c2.metric("Total Docks", f"{docks:,}")
+        if (discount_pct_input_cmp > 0) and (disc_price is not None):
+            c3.metric("Yearly Cost (discounted)", f"${disc_price:,}")
+            st.caption(f"Base price (pre-discount): ${base_price:,}")
         else:
-            # Competitor price estimate = price_per_dock * (launch_count * docks_per_location)
-            ppd = _price_per_dock(aerodome_types_or_product)
-            dpl = _docks_per_location(aerodome_types_or_product)
-            comp_total = int(ppd * (launch_count * dpl))
-            c3.metric("Yearly Cost (est.)", f"${comp_total:,}")
-            st.caption(f"Assumes {dpl} docks/location × {launch_count} locations × {SPECS[aerodome_types_or_product]['Pricing / Dock / Year (2-Year Contract)']}")
+            c3.metric("Yearly Cost", f"${base_price:,}")
 
-        # Specs list
-        st.markdown("**Specifications**")
-        if is_left:
-            # Single type -> show that product's specs
-            if len(aerodome_types_or_product) == 1:
-                prod = f"Flock Aerodome {aerodome_types_or_product[0]}"
-                for label, val in SPECS.get(prod, {}).items():
-                    st.write(f"**{label}**: {val}")
-            else:
-                # Multi-platform -> show each detected Aerodome type
-                for t in aerodome_types_or_product:
-                    prod = f"Flock Aerodome {t}"
-                    st.markdown(f"**{prod}**")
-                    for label, val in SPECS.get(prod, {}).items():
-                        st.write(f"- **{label}**: {val}")
-                    st.markdown("")
+        # Spec stack (exact order, no abbreviations)
+        if product_key_for_specs in specs_tidy.index:
+            specs = specs_tidy.loc[product_key_for_specs]
+            for row_name in SPEC_ROWS_ORDER:
+                if row_name in specs.index:
+                    st.write(f"**{row_name}**: {specs[row_name]}")
         else:
-            for label, val in SPECS.get(aerodome_types_or_product, {}).items():
-                st.write(f"**{label}**: {val}")
+            st.info("No specs found for this selection.")
 
-# Side-by-side panels
+# --- Two panels side-by-side -------------------------------------------------
 L, R = st.columns(2)
 with L:
-    panel(aerodome_title, detected_types, is_left=True)
-with R:
-    panel(comp_choice, comp_choice, is_left=False)
+    panel(
+        aerodome_title,
+        our_product_for_specs,
+        launches=launch_count,
+        docks=total_docks,
+        base_price=base_total_cmp,
+        disc_price=discounted_total_cmp,
+        is_left=True
+    )
 
-st.caption("Note: Maps are placeholders for now; we’ll swap in competitor-specific coverage later.")
+with R:
+    panel(
+        comp_choice,
+        comp_choice,
+        launches=launch_count,   # placeholder: same counts for now
+        docks=total_docks,       # placeholder: same counts for now
+        base_price=0,            # competitor pricing shown in spec list; total program calc TBD
+        disc_price=None,
+        is_left=False
+    )
+
+st.caption("Note: maps reuse your DFR points + range circle as a placeholder. Competitor coverage logic can be added later.")
