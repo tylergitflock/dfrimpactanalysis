@@ -1717,9 +1717,13 @@ c2.metric("Total Docks", f"{total_docks:,}")
 c3.metric("Total Radars", f"{total_radars:,}")
 c4.metric("Recommended Dock Type(s)", recommended_label)
 
+# Always show list cost
 c5, c6 = st.columns(2)
 c5.metric("Yearly Cost (List)", _fmt_usd(list_total))
-c6.metric(f"Yearly Cost (Discounted {int(discount_pct)}%)", _fmt_usd(discounted_total))
+
+# Show discounted cost only if >0
+if discount_pct > 0:
+    c6.metric(f"Yearly Cost (Discounted {int(discount_pct)}%)", _fmt_usd(discounted_total))
 
 # --- Expandable per-site breakdown ---
 with st.expander("Per-site pricing details"):
