@@ -1750,6 +1750,99 @@ st.markdown("---")
 st.header("Comparison")
 
 import requests
+# --- geometry helpers (needs: geopandas, shapely, scikit-learn, alphashape) ---
+# pip install geopandas shapely pyproj scikit-learn alphashape
+
+import geopandas as gpd
+from shapely.geometry import Point, Polygon
+from sklearn.cluster import KMeans, DBSCAN
+import alphashape
+
+SQM_PER_SQMI = 2_589_988.110336
+
+def _gdf_from_latlon(lat, lon, crs="EPSG:4326"):
+    return gpd.GeoDataFrame(geometry=gpd.points_from_xy(lon, lat), crs=crs)
+
+def _to_utm_gdf(lat_series, lon_series):
+    gdf = _gdf_from_latlon(lat_series, lon_series)
+    return gdf.to_crs(gdf.estimate_utm_crs())
+
+def calls_concave_hull_utm(lat, lon, eps_m=1500, min_samples=20, alpha=None,
+                           buffer_smooth_m=300, simplify_m=100):
+    """Return (polygon_UTM, area_sqmi) derived from call points; None if not enough points."""
+    mask = np.isfinite(lat) & np.isfinite(lon)
+    if mask.sum() < 10:
+        return None, 0.0
+
+    gdf = _to_utm_gdf(pd.Series(lat[mask]), pd.Series(lon[mask]))
+    X = np.c_[gdf.geometry.x.values, gdf.geometry.y.values]
+
+    # Drop outliers with DBSCAN; keep largest cluster
+    labels = DBSCAN(eps=eps_m, min_samples=min_samples).fit_predict(X)
+    if (labels >= 0).sum() == 0:
+        keep = np.ones(len(X), dtype=bool)
+    else:
+        lab_counts = pd.Series(labels[labels >= 0]).value_counts()
+        keep = labels == int(lab_counts.index[0])
+
+    pts = [Point(xy) for xy in X[keep]]
+    if len(pts) < 3:
+        return None, 0.0
+
+    # Alpha shape
+    if alpha is None:
+        # heuristic alpha from median NN distance
+        dmin = []
+        for i in range(len(pts)):
+            xi, yi = pts[i].x, pts[i].y
+            d = np.sqrt((X[keep][:,0] - xi)**2 + (X[keep][:,1] - yi)**2)
+            d[i] = np.inf
+            dmin.append(d.min())
+        alpha = 1.0 / max(np.median(dmin), 1.0)
+
+    poly = alphashape.alphashape(pts, alpha)
+    if poly is None:
+        return None, 0.0
+    if poly.geom_type == "MultiPolygon":
+        poly = max(poly.geoms, key=lambda p: p.area)
+
+    # Smooth & validate
+    poly = poly.buffer(buffer_smooth_m).simplify(simplify_m).buffer(-buffer_smooth_m).buffer(0)
+    if poly.is_empty:
+        return None, 0.0
+
+    area_sqmi = float(poly.area / SQM_PER_SQMI)
+    return poly, area_sqmi
+
+def union_launch_circles_utm(launch_latlon, radius_mi):
+    """Union of launch circles in UTM; returns (poly_UTM, area_sqmi)."""
+    if not launch_latlon:
+        return None, 0.0
+    lat = pd.Series([la for la, _ in launch_latlon])
+    lon = pd.Series([lo for _, lo in launch_latlon])
+    gdf = _to_utm_gdf(lat, lon)
+    r_m = float(radius_mi) * 1609.34
+    circles = gdf.buffer(r_m)
+    poly = circles.unary_union
+    if poly is None or poly.is_empty:
+        return None, 0.0
+    area_sqmi = float(poly.area / SQM_PER_SQMI)
+    return poly, area_sqmi
+
+def place_sites_kmeans_in_polygon(lat, lon, polygon_utm, n_sites, rng=42):
+    """Returns list[(lat, lon)] site centers chosen by K-Means on calls within polygon."""
+    if polygon_utm is None or n_sites < 1:
+        return []
+    gdf = _to_utm_gdf(pd.Series(lat), pd.Series(lon))
+    inside = gdf.within(polygon_utm)
+    if inside.sum() == 0:
+        return []
+    X = np.c_[gdf.geometry.x.values[inside], gdf.geometry.y.values[inside]]
+    n = max(1, min(n_sites, len(X)))
+    km = KMeans(n_clusters=n, n_init="auto", random_state=rng).fit(X)
+    centers_xy = km.cluster_centers_
+    centers_gdf = gpd.GeoDataFrame(geometry=[Point(xy) for xy in centers_xy], crs=gdf.crs).to_crs("EPSG:4326")
+    return [(p.y, p.x) for p in centers_gdf.geometry]
 
 # ---------------- Hardcoded specs/prices/ranges (from your CSV) --------------
 PLATFORMS = {
@@ -1932,7 +2025,38 @@ aerodome_title = f"Flock Aerodome — {'Multi-platform' if is_multi else detecte
 our_eff_range = max(PLATFORMS[t]["range_mi"] for t in detected_types_list) if detected_types_list else 3.5
 OUR_AREA_SQMI_EST = len(launch_coords) * math.pi * (our_eff_range ** 2)
 
-# ---------------- City area lookup (Wikidata) + manual override --------------
+# Build call-derived "city coverage" polygon
+calls_poly_utm, CALLS_AREA_SQMI = calls_concave_hull_utm(
+    lat=df_all["lat"].values, lon=df_all["lon"].values,
+    eps_m=1500, min_samples=20
+)
+
+# Build our-coverage polygon = union of our launch circles
+our_poly_utm, OUR_CIRCLES_AREA_SQMI = union_launch_circles_utm(
+    launch_coords, our_eff_range
+)
+
+# Choose placement mask:
+# default = city coverage from calls; if our coverage is smaller, constrain to ours
+if calls_poly_utm is None:
+    PLACEMENT_POLY_UTM = our_poly_utm
+    TARGET_AREA_SQMI = OUR_CIRCLES_AREA_SQMI
+else:
+    if OUR_CIRCLES_AREA_SQMI < CALLS_AREA_SQMI:
+        PLACEMENT_POLY_UTM = our_poly_utm
+        TARGET_AREA_SQMI   = OUR_CIRCLES_AREA_SQMI
+        target_label = f"Target area (our coverage smaller): {TARGET_AREA_SQMI:.2f} sq mi"
+    else:
+        PLACEMENT_POLY_UTM = calls_poly_utm
+        TARGET_AREA_SQMI   = CALLS_AREA_SQMI
+        target_label = f"Target area (call-derived city): {TARGET_AREA_SQMI:.2f} sq mi"
+st.caption(target_label)
+
+# ---------------- City limits default (from call data hull) + optional overrides --------------
+# Default "city area" comes from call-derived concave hull if we built one.
+CITY_AREA_SQMI_DEFAULT = float(CALLS_AREA_SQMI) if (CALLS_AREA_SQMI and CALLS_AREA_SQMI > 0) else None
+
+# Helper: optional Wikidata lookup (kept as an override, not the default)
 def wikidata_city_area_sqmi(city_query: str) -> float | None:
     try:
         r = requests.get(
@@ -1974,32 +2098,47 @@ def wikidata_city_area_sqmi(city_query: str) -> float | None:
     except Exception:
         return None
 
-with st.sidebar.expander("City area (for competitor coverage)", expanded=False):
-    city_query = st.text_input("City name (e.g., \"Boise, ID\")", key="cmp_city_query")
-    if st.button("Fetch area (sq mi)", use_container_width=True):
+with st.sidebar.expander("City limits (default = from call data)", expanded=False):
+    # Show what we detected from calls as the default
+    if CITY_AREA_SQMI_DEFAULT:
+        st.caption(f"Detected from call data hull: ~{CITY_AREA_SQMI_DEFAULT:.2f} sq mi")
+    else:
+        st.caption("Call-data hull unavailable (not enough points).")
+
+    # Optional: pull a wiki area if the user wants to compare/override
+    city_query = st.text_input("(Optional) Search Wikidata city name (e.g., \"Boise, ID\")", key="cmp_city_query")
+    if st.button("Fetch Wikidata area", use_container_width=True):
         sqmi = wikidata_city_area_sqmi(city_query) if city_query else None
         if sqmi:
             st.session_state["city_area_sqmi"] = float(sqmi)
-            st.success(f"Detected city area: {sqmi:.2f} sq mi")
+            st.success(f"Wikidata area loaded: {sqmi:.2f} sq mi (override)")
         else:
-            st.warning("Couldn’t find area automatically. Enter it manually below.")
+            st.warning("Couldn’t find area automatically. You can enter a manual value below.")
 
+    # Manual override (prefilled with current chosen area, defaulting to call-data hull)
+    current_default = st.session_state.get("city_area_sqmi", CITY_AREA_SQMI_DEFAULT or 0.0)
     manual_city_area = st.number_input(
-        "City area (sq mi, override/confirm)",
-        value=float(st.session_state.get("city_area_sqmi", 0.0)),
+        "City area (sq mi — leave as default to use call-data hull)",
+        value=float(current_default),
         min_value=0.0, step=1.0, format="%.2f"
     )
     st.session_state["city_area_sqmi"] = manual_city_area
 
+# Choose the polygon we’ll use for placement masks (visuals) and the scalar area
+# we’ll use for competitor location math. By default we use the call-data hull.
 CITY_AREA_SQMI = float(st.session_state.get("city_area_sqmi", 0.0)) or None
 
-# Target = smaller of (city area, our estimated coverage). If no city, use ours.
-if CITY_AREA_SQMI is not None and CITY_AREA_SQMI > 0:
-    TARGET_AREA_SQMI = min(CITY_AREA_SQMI, OUR_AREA_SQMI_EST)
-    target_label = f"Target area (smaller of city/our coverage): {TARGET_AREA_SQMI:.2f} sq mi"
+# Placement polygon (for competitor site placement) defaults to call hull if present;
+# else fall back to our union-of-circles coverage polygon.
+if calls_poly_utm is not None:
+    PLACEMENT_POLY_UTM = calls_poly_utm
+    TARGET_AREA_SQMI = CITY_AREA_SQMI or CALLS_AREA_SQMI or OUR_AREA_SQMI_EST
+    target_label = f"Target area (call-derived city limits): {TARGET_AREA_SQMI:.2f} sq mi"
 else:
-    TARGET_AREA_SQMI = OUR_AREA_SQMI_EST
-    target_label = f"Target area (our estimated coverage): {TARGET_AREA_SQMI:.2f} sq mi"
+    PLACEMENT_POLY_UTM = our_poly_utm
+    # If user typed an override, respect it; else use our coverage estimate
+    TARGET_AREA_SQMI = CITY_AREA_SQMI or OUR_AREA_SQMI_EST
+    target_label = f"Target area (our union-of-circles): {TARGET_AREA_SQMI:.2f} sq mi"
 
 st.caption(target_label)
 
@@ -2219,23 +2358,45 @@ def panel(title, product_names_list, is_left=True, competitor=None):
                 st.caption(f"Base price (pre-discount): ${our_base:,}")
             else:
                 c3.metric("Yearly Cost", f"${our_base:,}")
+        # inside panel(...), competitor branch
         else:
-            # Competitor metrics
             plan = competitor_plan(competitor, TARGET_AREA_SQMI)
             comp_docks_per_loc = PLATFORMS[competitor]["docks_per_location"]
             required_locs = plan["locations"]
             total_comp_docks = required_locs * comp_docks_per_loc
-
+        
+            # NEW: pick site centers inside PLACEMENT_POLY_UTM
+            comp_centers = place_sites_kmeans_in_polygon(
+                df_all["lat"].values, df_all["lon"].values,
+                PLACEMENT_POLY_UTM, n_sites=required_locs
+            )
+        
+            # Draw a fresh map with those centers + circles
+            # (keeps your style; swap into render_map if you prefer)
+            center_for_map = launch_coords[0] if launch_coords else (df_all["lat"].mean(), df_all["lon"].mean())
+            m = folium.Map(location=[float(center_for_map[0]), float(center_for_map[1])], zoom_start=11)
+        
+            # draw circles
+            comp_r_m = PLATFORMS[competitor]["range_mi"] * 1609.34
+            for (la, lo) in comp_centers:
+                folium.Circle(location=(la, lo), radius=comp_r_m, color="red", weight=3, fill=False).add_to(m)
+        
+            # (optional) also show our launch-range circle(s) faintly for context
+            for la, lo in launch_coords:
+                folium.Circle(location=(la, lo), radius=our_eff_range * 1609.34, color="blue", weight=2, fill=False, opacity=0.4).add_to(m)
+        
+            st_folium(m, width=800, height=500, key=f"cmp_comp_map_{competitor}")
+        
+            # Headline metrics
+            c1, c2, c3 = st.columns(3)
             c1.metric("Required Locations", f"{required_locs:,}")
             c2.metric("Total Docks", f"{total_comp_docks:,}")
             c3.metric("Yearly Cost", f"${plan['yearly_cost']:,}")
-
             st.caption(
                 f"Docks per location: {comp_docks_per_loc} • "
                 f"Per-location area: {plan['per_location_area_sqmi']:.2f} sq mi • "
                 f"Price/dock: ${plan['price_per_dock']:,}"
             )
-
         # Spec list (exact order you provided)
         def render_specs(pname: str):
             specs = PLATFORMS[pname]["specs"]
