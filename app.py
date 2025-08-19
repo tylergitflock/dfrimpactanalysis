@@ -1749,261 +1749,423 @@ with st.expander("Per-site pricing details"):
 st.markdown("---")
 st.header("Comparison")
 
-CMP_MAP_KEY_L = "cmp_map_left"
-CMP_MAP_KEY_R = "cmp_map_right"
+import requests
 
-# --- Hardcoded specs/pricing (metrics = rows, products = columns) -----------
-SPEC_ROWS_ORDER = [
-    "Pricing / Dock / Year (2-Year Contract)",
-    "Number of Docks / Location",
-    "Real-world Speed (MPH)",
-    "Response Time (1 Mile) (sec)",
-    "Real-world On-scene Time (min)",
-    "Hit License Plate at 400ft Alt",
-    "Effectively Fly at 400ft Alt",
-    "Night Vision",
-    "Integrations",
-]
-
-SPEC_DATA = {
+# ---------------- Hardcoded specs/prices/ranges (from your CSV) --------------
+PLATFORMS = {
     "Flock Aerodome M350": {
-        "Pricing / Dock / Year (2-Year Contract)": "$150,000",
-        "Number of Docks / Location": "1",
-        "Real-world Speed (MPH)": "51 mph",
-        "Response Time (1 Mile) (sec)": "41 sec",
-        "Real-world On-scene Time (min)": "35 min",
-        "Hit License Plate at 400ft Alt": "1000 ft",
-        "Effectively Fly at 400ft Alt": "Yes",
-        "Night Vision": "Yes",
-        "Integrations": "Flock911 AD, Flock LPR, Flock NOVA, Flock Audio, CAD, Inflight LPR, Flock OS / Fusus, Evidence.com",
+        "price_per_dock": 150000,
+        "docks_per_location": 1,
+        "range_mi": 3.5,
+        "specs": {
+            "Pricing / Dock / Year (2-Year Contract)": "$150,000",
+            "Number of Docks / Location": "1",
+            "Real-world Speed (MPH)": "51 mph",
+            "Response Time (1 Mile) (sec)": "41 sec",
+            "Real-world On-scene Time (min)": "35 min",
+            "Hit License Plate at 400ft Alt": "1000 ft",
+            "Effectively Fly at 400ft Alt": "Yes",
+            "Night Vision": "Yes",
+            "Integrations": "Flock911 AD, Flock LPR, Flock NOVA, Flock Audio, CAD, Inflight LPR, Flock OS / Fusus, Evidence.com",
+        },
     },
     "Flock Aerodome Dock 3": {
-        "Pricing / Dock / Year (2-Year Contract)": "$50,000",
-        "Number of Docks / Location": "2",
-        "Real-world Speed (MPH)": "47 mph",
-        "Response Time (1 Mile) (sec)": "47 sec",
-        "Real-world On-scene Time (min)": "40 min",
-        "Hit License Plate at 400ft Alt": "700 ft",
-        "Effectively Fly at 400ft Alt": "Yes",
-        "Night Vision": "Yes",
-        "Integrations": "Flock911 AD, Flock LPR, Flock NOVA, Flock Audio, CAD, Inflight LPR, Flock OS / Fusus, Evidence.com",
+        "price_per_dock": 50000,
+        "docks_per_location": 2,
+        "range_mi": 3.5,
+        "specs": {
+            "Pricing / Dock / Year (2-Year Contract)": "$50,000",
+            "Number of Docks / Location": "2",
+            "Real-world Speed (MPH)": "47 mph",
+            "Response Time (1 Mile) (sec)": "47 sec",
+            "Real-world On-scene Time (min)": "40 min",
+            "Hit License Plate at 400ft Alt": "700 ft",
+            "Effectively Fly at 400ft Alt": "Yes",
+            "Night Vision": "Yes",
+            "Integrations": "Flock911 AD, Flock LPR, Flock NOVA, Flock Audio, CAD, Inflight LPR, Flock OS / Fusus, Evidence.com",
+        },
     },
     "Flock Aerodome Alpha": {
-        "Pricing / Dock / Year (2-Year Contract)": "$125,000",
-        "Number of Docks / Location": "1",
-        "Real-world Speed (MPH)": "60 mph",
-        "Response Time (1 Mile) (sec)": "36 sec",
-        "Real-world On-scene Time (min)": "50 min",
-        "Hit License Plate at 400ft Alt": "1000 ft",
-        "Effectively Fly at 400ft Alt": "Yes",
-        "Night Vision": "Yes",
-        "Integrations": "Flock911 AD, Flock LPR, Flock NOVA, Flock Audio, CAD, Inflight LPR, Flock OS / Fusus, Evidence.com",
+        "price_per_dock": 125000,
+        "docks_per_location": 1,
+        "range_mi": 3.5,
+        "specs": {
+            "Pricing / Dock / Year (2-Year Contract)": "$125,000",
+            "Number of Docks / Location": "1",
+            "Real-world Speed (MPH)": "60 mph",
+            "Response Time (1 Mile) (sec)": "36 sec",
+            "Real-world On-scene Time (min)": "50 min",
+            "Hit License Plate at 400ft Alt": "1000 ft",
+            "Effectively Fly at 400ft Alt": "Yes",
+            "Night Vision": "Yes",
+            "Integrations": "Flock911 AD, Flock LPR, Flock NOVA, Flock Audio, CAD, Inflight LPR, Flock OS / Fusus, Evidence.com",
+        },
     },
     "Flock Aerodome Delta": {
-        "Pricing / Dock / Year (2-Year Contract)": "$300,000",
-        "Number of Docks / Location": "1",
-        "Real-world Speed (MPH)": "100 mph",
-        "Response Time (1 Mile) (sec)": "24 sec",
-        "Real-world On-scene Time (min)": "120 min",
-        "Hit License Plate at 400ft Alt": "1000 ft",
-        "Effectively Fly at 400ft Alt": "Yes",
-        "Night Vision": "Yes",
-        "Integrations": "Flock911 AD, Flock LPR, Flock NOVA, Flock Audio, CAD, Inflight LPR, Flock OS / Fusus, Evidence.com",
+        "price_per_dock": 300000,
+        "docks_per_location": 1,
+        "range_mi": 15.0,
+        "specs": {
+            "Pricing / Dock / Year (2-Year Contract)": "$300,000",
+            "Number of Docks / Location": "1",
+            "Real-world Speed (MPH)": "100 mph",
+            "Response Time (1 Mile) (sec)": "24 sec",
+            "Real-world On-scene Time (min)": "120 min",
+            "Hit License Plate at 400ft Alt": "1000 ft",
+            "Effectively Fly at 400ft Alt": "Yes",
+            "Night Vision": "Yes",
+            "Integrations": "Flock911 AD, Flock LPR, Flock NOVA, Flock Audio, CAD, Inflight LPR, Flock OS / Fusus, Evidence.com",
+        },
     },
+    # Competitors
     "Skydio X10": {
-        "Pricing / Dock / Year (2-Year Contract)": "$50,000",
-        "Number of Docks / Location": "3",
-        "Real-world Speed (MPH)": "30 mph",
-        "Response Time (1 Mile) (sec)": "157 sec",
-        "Real-world On-scene Time (min)": "15 min",
-        "Hit License Plate at 400ft Alt": "300 ft",
-        "Effectively Fly at 400ft Alt": "No",
-        "Night Vision": "No",
-        "Integrations": "Evidence.com, Flock OS / Fusus",
+        "price_per_dock": 50000,
+        "docks_per_location": 3,
+        "range_mi": 2.0,
+        "specs": {
+            "Pricing / Dock / Year (2-Year Contract)": "$50,000",
+            "Number of Docks / Location": "3",
+            "Real-world Speed (MPH)": "30 mph",
+            "Response Time (1 Mile) (sec)": "157 sec",
+            "Real-world On-scene Time (min)": "15 min",
+            "Hit License Plate at 400ft Alt": "300 ft",
+            "Effectively Fly at 400ft Alt": "No",
+            "Night Vision": "No",
+            "Integrations": "Evidence.com, Flock OS / Fusus",
+        },
     },
     "Brinc Responder": {
-        "Pricing / Dock / Year (2-Year Contract)": "$75,000",
-        "Number of Docks / Location": "3",
-        "Real-world Speed (MPH)": "30 mph",
-        "Response Time (1 Mile) (sec)": "157 sec",
-        "Real-world On-scene Time (min)": "15 min",
-        "Hit License Plate at 400ft Alt": "200 ft",
-        "Effectively Fly at 400ft Alt": "No",
-        "Night Vision": "No",
-        "Integrations": "None",
+        "price_per_dock": 75000,
+        "docks_per_location": 3,
+        "range_mi": 2.0,
+        "specs": {
+            "Pricing / Dock / Year (2-Year Contract)": "$75,000",
+            "Number of Docks / Location": "3",
+            "Real-world Speed (MPH)": "30 mph",
+            "Response Time (1 Mile) (sec)": "157 sec",
+            "Real-world On-scene Time (min)": "15 min",
+            "Hit License Plate at 400ft Alt": "200 ft",
+            "Effectively Fly at 400ft Alt": "No",
+            "Night Vision": "No",
+            "Integrations": "None",
+        },
     },
     "Paladin Dock 3": {
-        "Pricing / Dock / Year (2-Year Contract)": "$50,000",
-        "Number of Docks / Location": "2",
-        "Real-world Speed (MPH)": "33 mph",
-        "Response Time (1 Mile) (sec)": "61 sec",
-        "Real-world On-scene Time (min)": "35 min",
-        "Hit License Plate at 400ft Alt": "700 ft",
-        "Effectively Fly at 400ft Alt": "No",
-        "Night Vision": "Yes",
-        "Integrations": "None",
+        "price_per_dock": 50000,
+        "docks_per_location": 2,
+        "range_mi": 2.0,
+        "specs": {
+            "Pricing / Dock / Year (2-Year Contract)": "$50,000",
+            "Number of Docks / Location": "2",
+            "Real-world Speed (MPH)": "33 mph",
+            "Response Time (1 Mile) (sec)": "61 sec",
+            "Real-world On-scene Time (min)": "35 min",
+            "Hit License Plate at 400ft Alt": "700 ft",
+            "Effectively Fly at 400ft Alt": "No",
+            "Night Vision": "Yes",
+            "Integrations": "None",
+        },
     },
     "Dronesense Dock 3": {
-        "Pricing / Dock / Year (2-Year Contract)": "$40,000",
-        "Number of Docks / Location": "2",
-        "Real-world Speed (MPH)": "33 mph",
-        "Response Time (1 Mile) (sec)": "61 sec",
-        "Real-world On-scene Time (min)": "40 min",
-        "Hit License Plate at 400ft Alt": "700 ft",
-        "Effectively Fly at 400ft Alt": "Yes",
-        "Night Vision": "Yes",
-        "Integrations": "Axon Air, Evidence.com, Flock OS / Fusus",
+        "price_per_dock": 40000,
+        "docks_per_location": 2,
+        "range_mi": 2.0,
+        "specs": {
+            "Pricing / Dock / Year (2-Year Contract)": "$40,000",
+            "Number of Docks / Location": "2",
+            "Real-world Speed (MPH)": "33 mph",
+            "Response Time (1 Mile) (sec)": "61 sec",
+            "Real-world On-scene Time (min)": "40 min",
+            "Hit License Plate at 400ft Alt": "700 ft",
+            "Effectively Fly at 400ft Alt": "Yes",
+            "Night Vision": "Yes",
+            "Integrations": "Axon Air, Evidence.com, Flock OS / Fusus",
+        },
     },
 }
 
-# Convert to DataFrame shaped like earlier (products as index, metrics as columns)
-specs_tidy = pd.DataFrame(SPEC_DATA).T
+AERODOME_OPTIONS = [
+    "Flock Aerodome M350",
+    "Flock Aerodome Dock 3",
+    "Flock Aerodome Alpha",
+    "Flock Aerodome Delta",
+]
 
-# --- Pricing constants (yearly, no CAPEX) -----------------------------------
+COMPETITOR_OPTIONS = [
+    "Skydio X10",
+    "Brinc Responder",
+    "Paladin Dock 3",
+    "Dronesense Dock 3",
+]
+
+# ---------------- Pull counts & detected dock types from Launch CSV ----------
+def _get_col(df, *names):
+    colmap = {c.lower().strip(): c for c in df.columns}
+    for n in names:
+        c = colmap.get(n.lower().strip())
+        if c:
+            return df[c]
+    return None
+
+dock_type_col = _get_col(launch_rows, "Dock Type", "Drone Type", "Dock Type or Drone Type")
+docks_col     = _get_col(launch_rows, "Number of Docks")
+radars_col    = _get_col(launch_rows, "Number of Radar")
+
+launch_count = len(launch_rows)
+total_docks  = int(pd.to_numeric(docks_col, errors="coerce").fillna(0).sum()) if docks_col is not None else 0
+total_radars = int(pd.to_numeric(radars_col, errors="coerce").fillna(0).sum()) if radars_col is not None else 0
+
+# Default to Dock 3 when dock type cell is blank
+def _normalized_dock_types():
+    if dock_type_col is None or dock_type_col.empty:
+        return ["Flock Aerodome Dock 3"]
+    vals = dock_type_col.astype(str).fillna("").str.strip()
+    vals = vals.replace("", "Flock Aerodome Dock 3")
+    # Normalize to one of our keys
+    out = []
+    for v in vals:
+        v2 = v.replace("Flock Aerodome ", "").strip()
+        if v2.upper() in ["M350", "DOCK 3", "ALPHA", "DELTA"]:
+            label = f"Flock Aerodome {v2.title() if v2!='DOCK 3' else 'Dock 3'}"
+        else:
+            label = "Flock Aerodome Dock 3"
+        out.append(label)
+    return out
+
+detected_types_list = sorted(set(_normalized_dock_types()))
+is_multi = len(detected_types_list) > 1
+aerodome_title = f"Flock Aerodome — {'Multi-platform' if is_multi else detected_types_list[0].split('Flock Aerodome ',1)[-1]}"
+
+# Effective range for *our* coverage estimate
+our_eff_range = 15.0 if any("Delta" in t for t in detected_types_list) else 3.5
+OUR_AREA_SQMI_EST = len(launch_coords) * math.pi * (our_eff_range ** 2)
+
+# ---------------- City area lookup (Wikidata) + manual override --------------
+def wikidata_city_area_sqmi(city_query: str) -> float | None:
+    try:
+        # 1) search for entity
+        r = requests.get(
+            "https://www.wikidata.org/w/api.php",
+            params={"action": "wbsearchentities", "search": city_query, "language": "en", "type": "item", "format": "json", "limit": 5},
+            timeout=10,
+        )
+        r.raise_for_status()
+        hits = r.json().get("search", [])
+        if not hits:
+            return None
+        # pick first that looks like a city
+        pick = None
+        for h in hits:
+            desc = (h.get("description") or "").lower()
+            if "city" in desc or "town" in desc or "municipality" in desc:
+                pick = h
+                break
+        if pick is None:
+            pick = hits[0]
+        qid = pick["id"]
+
+        # 2) fetch entity data and read P2046 (area)
+        r2 = requests.get(f"https://www.wikidata.org/wiki/Special:EntityData/{qid}.json", timeout=10)
+        r2.raise_for_status()
+        ent = list(r2.json()["entities"].values())[0]
+        claims = ent.get("claims", {})
+        areas = claims.get("P2046", [])
+        if not areas:
+            return None
+
+        # prefer 'preferred' rank, else first normal
+        def _amount_sqmi(claim):
+            mainsnak = claim.get("mainsnak", {})
+            dv = mainsnak.get("datavalue", {})
+            v = dv.get("value", {})
+            amount = float(v.get("amount", "0").replace("+", ""))
+            unit = v.get("unit", "")
+            # Wikidata stores area in square meters typically
+            if unit.endswith("/Q25343"):  # square metre
+                sqmi = amount / 2_589_988.110336
+            else:
+                # fallback assume square meters
+                sqmi = amount / 2_589_988.110336
+            return sqmi
+
+        preferred = [c for c in areas if c.get("rank") == "preferred"] or areas
+        return _amount_sqmi(preferred[0])
+    except Exception:
+        return None
+
+with st.sidebar.expander("City area (for competitor coverage)", expanded=False):
+    city_query = st.text_input("City name (e.g., \"Boise, ID\")", key="cmp_city_query")
+    if st.button("Fetch area (sq mi)", use_container_width=True):
+        sqmi = wikidata_city_area_sqmi(city_query) if city_query else None
+        if sqmi:
+            st.session_state["city_area_sqmi"] = float(sqmi)
+            st.success(f"Detected city area: {sqmi:.2f} sq mi")
+        else:
+            st.warning("Couldn’t find area automatically. Enter it manually below.")
+
+    manual_city_area = st.number_input(
+        "City area (sq mi, override/confirm)",
+        value=float(st.session_state.get("city_area_sqmi", 0.0)),
+        min_value=0.0, step=1.0, format="%.2f"
+    )
+    st.session_state["city_area_sqmi"] = manual_city_area
+
+CITY_AREA_SQMI = float(st.session_state.get("city_area_sqmi", 0.0)) or None
+
+# Target = smaller of (city area, our estimated coverage). If no city, use ours.
+if CITY_AREA_SQMI is not None and CITY_AREA_SQMI > 0:
+    TARGET_AREA_SQMI = min(CITY_AREA_SQMI, OUR_AREA_SQMI_EST)
+    target_label = f"Target area (smaller of city/our coverage): {TARGET_AREA_SQMI:.2f} sq mi"
+else:
+    TARGET_AREA_SQMI = OUR_AREA_SQMI_EST
+    target_label = f"Target area (our estimated coverage): {TARGET_AREA_SQMI:.2f} sq mi"
+
+st.caption(target_label)
+
+# ---------------- Aerodome yearly pricing (w/ optional discount) -------------
+RADAR_PRICE = 150000  # your earlier constant
+
 DOCK_PRICES = {
     "Dock 3": 50000,
     "Alpha": 125000,
     "Delta": 300000,
     "M350": 150000,
 }
-RADAR_PRICE = 150000
 
-# Helper to fetch columns from Launch Locations (case/space tolerant)
-def _get_col(df, *names):
-    cmap = {c.lower().strip(): c for c in df.columns}
-    for n in names:
-        key = n.lower().strip()
-        if key in cmap:
-            return df[cmap[key]]
-    return None
+def _dock_price_for_row(row):
+    v = str(row.get(dock_type_col.name, "") if dock_type_col is not None else "").strip()
+    v = v.replace("Flock Aerodome ", "")
+    v = (v or "Dock 3").strip()
+    return DOCK_PRICES.get(v, DOCK_PRICES["Dock 3"])
 
-# Read counts from your already-built launch_rows
-dock_type_series = _get_col(launch_rows, "Dock Type", "Drone Type", "Dock Type or Drone Type")
-docks_col       = _get_col(launch_rows, "Number of Docks")
-radars_col      = _get_col(launch_rows, "Number of Radar")
-
-# Normalize dock types, defaulting blanks/missing to Dock 3
-if dock_type_series is None or dock_type_series.empty:
-    dock_vals_norm = pd.Series(["Dock 3"] * len(launch_rows))
-else:
-    dock_vals_norm = (
-        dock_type_series.astype(str)
-        .str.strip()
-        .replace("", "Dock 3")
-        .str.replace("Flock Aerodome ", "", regex=False)
-        .str.title()
-    )
-    # anything outside known set -> Dock 3
-    dock_vals_norm = dock_vals_norm.where(dock_vals_norm.isin(["Dock 3","Alpha","Delta","M350"]), "Dock 3")
-
-detected_types = sorted(dock_vals_norm.dropna().unique().tolist()) if len(launch_rows) else ["Dock 3"]
-
-launch_count = int(len(launch_rows))
-total_docks  = int(pd.to_numeric(docks_col, errors="coerce").fillna(0).sum()) if docks_col is not None else 0
-total_radars = int(pd.to_numeric(radars_col, errors="coerce").fillna(0).sum()) if radars_col is not None else 0
-
-# Per-row dock price (based on each row's normalized dock type)
-def _dock_price_for_row(idx):
-    try:
-        dt = dock_vals_norm.iloc[idx] if idx < len(dock_vals_norm) else "Dock 3"
-        return DOCK_PRICES.get(str(dt), 0)
-    except Exception:
-        return DOCK_PRICES.get("Dock 3", 0)
-
-# Yearly pricing calc (base + optional discount)
-def compute_yearly_price(disc_pct: float = 0.0):
+def compute_our_yearly_price(disc_fraction: float = 0.0):
     if launch_rows.empty:
         base = 0
     else:
-        _docks  = pd.to_numeric(docks_col, errors="coerce").fillna(0) if docks_col is not None else pd.Series([0]*len(launch_rows))
-        _radars = pd.to_numeric(radars_col, errors="coerce").fillna(0) if radars_col is not None else pd.Series([0]*len(launch_rows))
-        row_prices = pd.Series([_dock_price_for_row(i) for i in range(len(launch_rows))], index=launch_rows.index)
-        base = int((_docks * row_prices).sum() + (_radars * RADAR_PRICE).sum())
-    disc = float(disc_pct or 0.0)
-    disc_total = int(round(base * (1.0 - disc))) if disc > 0 else None
-    return base, disc_total
+        _rows = launch_rows.copy()
+        _rows["_docks"] = pd.to_numeric(docks_col, errors="coerce").fillna(0) if docks_col is not None else 0
+        _rows["_radars"] = pd.to_numeric(radars_col, errors="coerce").fillna(0) if radars_col is not None else 0
+        _rows["_dock_price"] = _rows.apply(_dock_price_for_row, axis=1)
+        base = int((_rows["_docks"] * _rows["_dock_price"]).sum() + _rows["_radars"].sum() * RADAR_PRICE)
+    return (int(round(base * (1.0 - disc_fraction))) if disc_fraction > 0 else None,
+            int(base))
 
-# Discount control (independent here; only shows discounted line if >0)
-c_disc1, _ = st.columns([1,3])
-with c_disc1:
-    discount_pct_input_cmp = st.number_input("Discount (%)", min_value=0, max_value=100, value=0, step=1, key="cmp_discount")
-discount_fraction_cmp = float(discount_pct_input_cmp) / 100.0
+disc_pct = st.number_input("Discount (%)", min_value=0, max_value=100, value=0, step=1, help="Applies to Aerodome yearly cost only.")
+disc_fraction = float(disc_pct) / 100.0
+our_discounted, our_base = compute_our_yearly_price(disc_fraction)
 
-base_total_cmp, discounted_total_cmp = compute_yearly_price(discount_fraction_cmp)
+# ---------------- Competitor required locations & yearly cost ----------------
+def circle_area_sqmi(radius_mi: float) -> float:
+    return math.pi * (radius_mi ** 2)
 
-# Competitor selection (hard-coded list)
-competitor_options = ["Skydio X10", "Brinc Responder", "Paladin Dock 3", "Dronesense Dock 3"]
-comp_choice = st.selectbox("Compare against", competitor_options, index=0)
+def round_locations(x: float) -> int:
+    """
+    Custom rounding: fractional part >= 0.35 -> ceil, else floor. Min 1.
+    Examples: 2.32 -> 2 ; 2.40 -> 3 ; 6.30 -> 6 ; 6.40 -> 7
+    """
+    if x <= 1.0:
+        return 1
+    frac = x - math.floor(x)
+    return max(1, math.floor(x) + (1 if frac >= 0.35 else 0))
 
-# Build Aerodome title based on detected types
-if len(detected_types) == 1:
-    aerodome_variant = detected_types[0]
-    aerodome_title = f"Flock Aerodome – {aerodome_variant}"
-    # pick a matching spec card to show under the map (for clarity)
-    our_product_for_specs = f"Flock Aerodome {aerodome_variant}"
-else:
-    aerodome_title = "Flock Aerodome – Multi-platform"
-    # If multiple, pick the first detected that we have a card for, else default to Delta (for the spec list only)
-    _candidates = [f"Flock Aerodome {t}" for t in detected_types]
-    our_product_for_specs = next((c for c in _candidates if c in specs_tidy.index), "Flock Aerodome Delta")
+def competitor_plan(comp_name: str, target_area_sqmi: float):
+    cfg = PLATFORMS[comp_name]
+    per_loc_area = circle_area_sqmi(cfg["range_mi"])
+    raw_needed = (target_area_sqmi / per_loc_area) if per_loc_area > 0 else 1.0
+    locations = round_locations(raw_needed)
+    yearly_cost = locations * cfg["docks_per_location"] * cfg["price_per_dock"]
+    return {
+        "locations": locations,
+        "yearly_cost": yearly_cost,
+        "per_location_area_sqmi": per_loc_area,
+        "docks_per_location": cfg["docks_per_location"],
+        "price_per_dock": cfg["price_per_dock"],
+    }
 
-# --- Panel renderer ----------------------------------------------------------
-def panel(title, product_key_for_specs, launches, docks, base_price, disc_price, is_left=True):
+# Choose competitor
+comp_choice = st.selectbox("Compare against", COMPETITOR_OPTIONS, index=0)
+
+# ---------------- Panel renderer --------------------------------------------
+def panel(title, product_names_list, is_left=True, competitor=None):
     with st.container(border=True):
         st.subheader(title)
 
-        # Map (placeholder): reuse your in-range heat + range circle
+        # Map placeholder (reuse DFR heat + range circle)
         render_map(
             all_dfr,
             heat=True,
             heat_radius=8, heat_blur=12,
             title="",
-            key=(CMP_MAP_KEY_L if is_left else CMP_MAP_KEY_R),  # ← stable, no uuid
+            key=f"cmp_map_{'L' if is_left else 'R'}_{title}",
             show_circle=True,
             launch_coords=launch_coords
         )
 
-        # Headline stats
+        # Headline stats row
         c1, c2, c3 = st.columns(3)
-        c1.metric("Launch Locations", f"{launches:,}")
-        c2.metric("Total Docks", f"{docks:,}")
-        if (discount_pct_input_cmp > 0) and (disc_price is not None):
-            c3.metric("Yearly Cost (discounted)", f"${disc_price:,}")
-            st.caption(f"Base price (pre-discount): ${base_price:,}")
-        else:
-            c3.metric("Yearly Cost", f"${base_price:,}")
+        c1.metric("Launch Locations", f"{launch_count:,}")
+        c2.metric("Total Docks", f"{total_docks:,}")
 
-        # Spec stack (exact order, no abbreviations)
-        if product_key_for_specs in specs_tidy.index:
-            specs = specs_tidy.loc[product_key_for_specs]
-            for row_name in SPEC_ROWS_ORDER:
-                if row_name in specs.index:
-                    st.write(f"**{row_name}**: {specs[row_name]}")
+        if is_left:
+            # Aerodome pricing with discount display rule
+            if disc_fraction > 0 and our_discounted is not None:
+                c3.metric("Yearly Cost (discounted)", f"${our_discounted:,}")
+                st.caption(f"Base price (pre-discount): ${our_base:,}")
+            else:
+                c3.metric("Yearly Cost", f"${our_base:,}")
         else:
-            st.info("No specs found for this selection.")
+            # Competitor computed locations & yearly cost
+            plan = competitor_plan(competitor, TARGET_AREA_SQMI)
+            c3.metric("Yearly Cost", f"${plan['yearly_cost']:,}")
+            c1.metric("Estimated Locations", f"{plan['locations']:,}")
+            # Replace c2 to show per-site dock config for competitor
+            c2.metric("Docks per Location", str(PLATFORMS[competitor]["docks_per_location"]))
+            st.caption(
+                f"Per-location area: {plan['per_location_area_sqmi']:.2f} sq mi; "
+                f"Price/dock: ${plan['price_per_dock']:,}"
+            )
 
-# --- Two panels side-by-side -------------------------------------------------
+        # Spec list (exact order you provided)
+        def render_specs(pname: str):
+            specs = PLATFORMS[pname]["specs"]
+            rows_in_order = [
+                "Pricing / Dock / Year (2-Year Contract)",
+                "Number of Docks / Location",
+                "Real-world Speed (MPH)",
+                "Response Time (1 Mile) (sec)",
+                "Real-world On-scene Time (min)",
+                "Hit License Plate at 400ft Alt",
+                "Effectively Fly at 400ft Alt",
+                "Night Vision",
+                "Integrations",
+            ]
+            for r in rows_in_order:
+                if r in specs:
+                    st.write(f"**{r}**: {specs[r]}")
+
+        if is_left:
+            # Aerodome: show all detected platforms if multi; otherwise the single
+            if is_multi:
+                st.markdown("**Detected Aerodome Platforms:** " + ", ".join(detected_types_list))
+                for p in detected_types_list:
+                    st.markdown(f"**{p}**")
+                    render_specs(p)
+                    st.markdown("---")
+            else:
+                render_specs(product_names_list[0])
+        else:
+            render_specs(competitor)
+
+# ---------------- Two columns: Aerodome vs. Competitor -----------------------
 L, R = st.columns(2)
 with L:
-    panel(
-        aerodome_title,
-        our_product_for_specs,
-        launches=launch_count,
-        docks=total_docks,
-        base_price=base_total_cmp,
-        disc_price=discounted_total_cmp,
-        is_left=True
-    )
+    panel(aerodome_title, detected_types_list if is_multi else detected_types_list[:1], is_left=True)
 
 with R:
-    panel(
-        comp_choice,
-        comp_choice,
-        launches=launch_count,   # placeholder: same counts for now
-        docks=total_docks,       # placeholder: same counts for now
-        base_price=0,            # competitor pricing shown in spec list; total program calc TBD
-        disc_price=None,
-        is_left=False
-    )
+    panel(comp_choice, [], is_left=False, competitor=comp_choice)
 
-st.caption("Note: maps reuse your DFR points + range circle as a placeholder. Competitor coverage logic can be added later.")
+st.caption(
+    "Note: Competitor maps are placeholders for now. "
+    "Estimated locations and yearly cost are computed from target area, each platform’s effective range, "
+    "docks per location, and price per dock. Target area uses the smaller of (city area, our estimated coverage)."
+)
