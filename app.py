@@ -676,8 +676,8 @@ with st.sidebar.expander("Agency details", expanded=True):
     run_notes = st.text_area("Run notes (optional)", height=80, key="run_notes")
 
 # Resolve and keep everything in sync
-agency_name = (agency_name_input or st.session_state.get("manual_agency_name", "")).strip()
-st.session_state["manual_agency_name"] = agency_name  # single source of truth
+agency_name = (agency_name or st.session_state.get("manual_agency_name", "")).strip()
+st.session_state["manual_agency_name"] = agency_name
 
 st.sidebar.header("5) ALPR & Audio (optional)")
 
