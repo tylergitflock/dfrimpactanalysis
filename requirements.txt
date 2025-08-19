@@ -5,3 +5,7 @@ folium>=0.14
 streamlit-folium>=0.12
 geopy
 tzlocal
+shapely
+pyproj
+scikit-learn
+alphashape
