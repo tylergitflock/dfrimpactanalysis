@@ -15,6 +15,7 @@ import folium
 from folium.plugins import HeatMap
 import math
 import zipfile, re
+import geopandas
 
 # ─── Page Setup (must be first Streamlit call) ───────────────────────────────
 st.set_page_config(page_title="DFR Impact Analysis", layout="wide")
