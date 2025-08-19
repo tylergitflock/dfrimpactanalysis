@@ -1746,301 +1746,118 @@ with st.expander("Per-site pricing details"):
         f"Discounted Total={_fmt_usd(discounted_total)}"
     )
 
-# ─── 7) COMPARISON (side-by-side) ────────────────────────────────────────────
+# ─── 7) COMPARISON (no GeoPandas; city limits from call data) ────────────────
 st.markdown("---")
 st.header("Comparison")
 
-import requests
-# --- geometry helpers (no geopandas needed) ----------------------------------
-# keep: from shapely.geometry import Point        (you already import Point above)
-# keep: from sklearn.cluster import KMeans, DBSCAN
-# keep: import alphashape
+import math
+import numpy as np
+import pandas as pd
+import folium
+from streamlit_folium import st_folium
+from shapely.geometry import Point
+from sklearn.cluster import KMeans, DBSCAN
+from sklearn.neighbors import NearestNeighbors
 from pyproj import Transformer
+import alphashape
 
 SQM_PER_SQMI = 2_589_988.110336
 
-def _utm_transformers_from_points(lat_arr, lon_arr):
-    """
-    Build forward/backward transformers for a local UTM zone chosen from the data centroid.
-    Returns (fwd, inv) where:
-      fwd: lon,lat -> x,y (meters)
-      inv: x,y -> lon,lat
-    """
-    lat0 = float(np.nanmean(lat_arr)) if np.isfinite(np.nanmean(lat_arr)) else 0.0
-    lon0 = float(np.nanmean(lon_arr)) if np.isfinite(np.nanmean(lon_arr)) else 0.0
-    zone = int((lon0 + 180.0) // 6) + 1
-    epsg = 32600 + zone if lat0 >= 0 else 32700 + zone
+# ---------- UTM helpers ----------
+def _utm_epsg_for(lat_deg: float, lon_deg: float) -> int:
+    zone = int((lon_deg + 180) // 6) + 1
+    north = lat_deg >= 0
+    return (32600 if north else 32700) + zone
+
+def _make_transformers(lat_arr, lon_arr):
+    lat0 = float(np.nanmean(lat_arr)) if len(lat_arr) else 0.0
+    lon0 = float(np.nanmean(lon_arr)) if len(lon_arr) else 0.0
+    epsg = _utm_epsg_for(lat0, lon0)
     fwd = Transformer.from_crs("EPSG:4326", f"EPSG:{epsg}", always_xy=True)
     inv = Transformer.from_crs(f"EPSG:{epsg}", "EPSG:4326", always_xy=True)
     return fwd, inv
 
-def _project_lonlat_to_xy(lon_arr, lat_arr, fwd: Transformer):
-    x, y = fwd.transform(lon_arr, lat_arr)  # always_xy=True → (lon,lat)
-    return np.column_stack([np.asarray(x), np.asarray(y)])
+def _project_points(fwd: Transformer, lats, lons):
+    x, y = fwd.transform(np.asarray(lons, dtype=float), np.asarray(lats, dtype=float))
+    return np.asarray(x), np.asarray(y)
 
-def calls_concave_hull_utm(lat, lon, eps_m=1500, min_samples=20, alpha=None,
-                           buffer_smooth_m=300, simplify_m=100):
-    """
-    Return (polygon_UTM, area_sqmi) derived from call points in local UTM (shapely Polygon or None).
-    """
-    lat = np.asarray(lat, dtype=float)
-    lon = np.asarray(lon, dtype=float)
-    mask = np.isfinite(lat) & np.isfinite(lon)
+def _unproject_points(inv: Transformer, xs, ys):
+    lon, lat = inv.transform(np.asarray(xs, dtype=float), np.asarray(ys, dtype=float))
+    return np.asarray(lat), np.asarray(lon)
+
+# ---------- City limits from call data (concave hull in meters) ----------
+def calls_concave_hull_utm(lat, lon, eps_m=1500, min_samples=20,
+                           alpha=None, buffer_smooth_m=300, simplify_m=100):
+    lat = pd.to_numeric(pd.Series(lat), errors="coerce")
+    lon = pd.to_numeric(pd.Series(lon), errors="coerce")
+    mask = lat.notna() & lon.notna()
     if mask.sum() < 10:
-        return None, 0.0
+        return None, 0.0, (None, None)
 
-    fwd, _inv = _utm_transformers_from_points(lat[mask], lon[mask])
-    XY = _project_lonlat_to_xy(lon[mask], lat[mask], fwd)
+    fwd, inv = _make_transformers(lat[mask].values, lon[mask].values)
+    X, Y = _project_points(fwd, lat[mask].values, lon[mask].values)
 
-    # Drop outliers with DBSCAN; keep largest cluster
-    labels = DBSCAN(eps=eps_m, min_samples=min_samples).fit_predict(XY)
-    if (labels >= 0).sum() == 0:
-        keep = np.ones(len(XY), dtype=bool)
-    else:
-        lab_counts = pd.Series(labels[labels >= 0]).value_counts()
-        keep = labels == int(lab_counts.index[0])
+    labels = DBSCAN(eps=eps_m, min_samples=min_samples).fit_predict(np.c_[X, Y])
+    if (labels >= 0).sum() > 0:
+        labs, cnts = np.unique(labels[labels >= 0], return_counts=True)
+        keep_lab = labs[np.argmax(cnts)]
+        sel = labels == keep_lab
+        X, Y = X[sel], Y[sel]
 
-    XYk = XY[keep]
-    if len(XYk) < 3:
-        return None, 0.0
+    if len(X) < 3:
+        return None, 0.0, (fwd, inv)
 
-        # Alpha shape
+    XY = np.c_[X, Y]
     if alpha is None:
-        # median nearest-neighbor distance using scikit-learn (no SciPy needed)
-        from sklearn.neighbors import NearestNeighbors
-        nbrs = NearestNeighbors(n_neighbors=2, algorithm="auto").fit(XYk)
-        dists, _ = nbrs.kneighbors(XYk, return_distance=True)
-        # dists[:, 0] is 0 (self); use the 1st neighbor
-        dmin = dists[:, 1]
-        med = float(np.median(dmin)) if np.isfinite(np.median(dmin)) and np.median(dmin) > 0 else 1.0
+        nbrs = NearestNeighbors(n_neighbors=2).fit(XY)
+        dists, _ = nbrs.kneighbors(XY)
+        med = float(np.median(dists[:, 1])) if np.isfinite(np.median(dists[:, 1])) and np.median(dists[:, 1]) > 0 else 1.0
         alpha = 1.0 / med
 
-    pts = [Point(xy) for xy in XYk]
+    pts = [Point(float(x), float(y)) for x, y in XY]
     poly = alphashape.alphashape(pts, alpha)
-    if poly is None or poly.is_empty:
-        return None, 0.0
+    if not poly or poly.is_empty:
+        return None, 0.0, (fwd, inv)
     if poly.geom_type == "MultiPolygon":
         poly = max(poly.geoms, key=lambda p: p.area)
 
-    # Smooth/simplify in meters
     poly = poly.buffer(buffer_smooth_m).simplify(simplify_m).buffer(-buffer_smooth_m).buffer(0)
     if poly.is_empty:
-        return None, 0.0
+        return None, 0.0, (fwd, inv)
 
     area_sqmi = float(poly.area / SQM_PER_SQMI)
-    return poly, area_sqmi
+    return poly, area_sqmi, (fwd, inv)
 
-def union_launch_circles_utm(launch_latlon, radius_mi):
-    """
-    Union of launch circles in local UTM. Returns (poly_UTM, area_sqmi).
-    """
+# ---------- Our coverage (union of launch circles in meters) ----------
+def union_launch_circles_utm(launch_latlon, radius_mi, fwd: Transformer | None):
     if not launch_latlon:
         return None, 0.0
-
-    lat_arr = np.array([la for (la, _lo) in launch_latlon], dtype=float)
-    lon_arr = np.array([lo for (_la, lo) in launch_latlon], dtype=float)
-
-    fwd, _inv = _utm_transformers_from_points(lat_arr, lon_arr)
-    XY = _project_lonlat_to_xy(lon_arr, lat_arr, fwd)
+    if fwd is None:
+        lats = np.array([la for la, _ in launch_latlon], dtype=float)
+        lons = np.array([lo for _, lo in launch_latlon], dtype=float)
+        fwd, _ = _make_transformers(lats, lons)
 
     r_m = float(radius_mi) * 1609.34
-    circles = [Point(xy).buffer(r_m) for xy in XY]
-    union_poly = circles[0]
+    xs, ys = _project_points(fwd,
+                             np.array([la for la, _ in launch_latlon], dtype=float),
+                             np.array([lo for _, lo in launch_latlon], dtype=float))
+    circles = [Point(float(x), float(y)).buffer(r_m) for x, y in zip(xs, ys)]
+    poly = circles[0]
     for c in circles[1:]:
-        union_poly = union_poly.union(c)
-
-    if union_poly is None or union_poly.is_empty:
+        poly = poly.union(c)
+    if not poly or poly.is_empty:
         return None, 0.0
+    return poly, float(poly.area / SQM_PER_SQMI)
 
-    area_sqmi = float(union_poly.area / SQM_PER_SQMI)
-    return union_poly, area_sqmi
-
-def place_sites_kmeans_in_polygon(lat, lon, polygon_utm, n_sites, rng=42):
-    """
-    Returns list[(lat, lon)] site centers chosen by K-Means on calls within polygon (all in UTM),
-    converted back to WGS84.
-    """
-    if polygon_utm is None or n_sites < 1:
+# ---------- Outline conversion for folium ----------
+def polygon_outline_latlon(poly_utm, inv: Transformer):
+    if poly_utm is None or poly_utm.is_empty or inv is None:
         return []
-
-    lat = np.asarray(lat, dtype=float)
-    lon = np.asarray(lon, dtype=float)
-    mask = np.isfinite(lat) & np.isfinite(lon)
-    if mask.sum() == 0:
-        return []
-
-    # Build transformers from *all* points so the UTM zone matches our polygon CRS
-    fwd, inv = _utm_transformers_from_points(lat[mask], lon[mask])
-    XY = _project_lonlat_to_xy(lon[mask], lat[mask], fwd)
-
-    # Keep only points inside polygon_utm
-    inside_mask = np.array([polygon_utm.contains(Point(xy)) for xy in XY], dtype=bool)
-    X_in = XY[inside_mask]
-    if len(X_in) == 0:
-        return []
-
-    n = max(1, min(int(n_sites), len(X_in)))
-    km = KMeans(n_clusters=n, n_init="auto", random_state=rng).fit(X_in)
-    cx, cy = km.cluster_centers_[:, 0], km.cluster_centers_[:, 1]
-    lon_c, lat_c = inv.transform(cx, cy)  # back to lon/lat
-    return [(float(lat_c[i]), float(lon_c[i])) for i in range(len(lat_c))]
-
-# (Optional) draw the hull/union outline on folium for context
-def draw_polygon_outline_on_folium(m, polygon_utm, color="purple", weight=3, opacity=0.6):
-    if polygon_utm is None or polygon_utm.is_empty:
-        return
-    # Pick a transformer from polygon centroid
-    cx, cy = polygon_utm.representative_point().x, polygon_utm.representative_point().y
-    # Fake a local inv transformer: infer UTM EPSG by projecting centroid back from a guessed EPSG
-    # Easiest: reuse the same approach as above using a rough lat/lon guess (not critical for outline)
-    # We'll reverse-engineer using a tiny local buffer point:
-    # Here we assume the polygon CRS is the same UTM chosen by _utm_transformers_from_points on your calls/launches,
-    # so reuse the same INV you used to create polygon_utm. If not handy, you can skip drawing.
-    try:
-        # You likely have the same 'inv' around when you created the polygon. If not, skip.
-        pass
-    except Exception:
-        return
-
-# ---------------- Hardcoded specs/prices/ranges (from your CSV) --------------
-PLATFORMS = {
-    "Flock Aerodome M350": {
-        "price_per_dock": 150000,
-        "docks_per_location": 1,
-        "range_mi": 3.5,
-        "specs": {
-            "Pricing / Dock / Year (2-Year Contract)": "$150,000",
-            "Number of Docks / Location": "1",
-            "Real-world Speed (MPH)": "51 mph",
-            "Response Time (1 Mile) (sec)": "41 sec",
-            "Real-world On-scene Time (min)": "35 min",
-            "Hit License Plate at 400ft Alt": "1000 ft",
-            "Effectively Fly at 400ft Alt": "Yes",
-            "Night Vision": "Yes",
-            "Integrations": "Flock911 AD, Flock LPR, Flock NOVA, Flock Audio, CAD, Inflight LPR, Flock OS / Fusus, Evidence.com",
-        },
-    },
-    "Flock Aerodome Dock 3": {
-        "price_per_dock": 50000,
-        "docks_per_location": 2,
-        "range_mi": 3.5,
-        "specs": {
-            "Pricing / Dock / Year (2-Year Contract)": "$50,000",
-            "Number of Docks / Location": "2",
-            "Real-world Speed (MPH)": "47 mph",
-            "Response Time (1 Mile) (sec)": "47 sec",
-            "Real-world On-scene Time (min)": "40 min",
-            "Hit License Plate at 400ft Alt": "700 ft",
-            "Effectively Fly at 400ft Alt": "Yes",
-            "Night Vision": "Yes",
-            "Integrations": "Flock911 AD, Flock LPR, Flock NOVA, Flock Audio, CAD, Inflight LPR, Flock OS / Fusus, Evidence.com",
-        },
-    },
-    "Flock Aerodome Alpha": {
-        "price_per_dock": 125000,
-        "docks_per_location": 1,
-        "range_mi": 3.5,
-        "specs": {
-            "Pricing / Dock / Year (2-Year Contract)": "$125,000",
-            "Number of Docks / Location": "1",
-            "Real-world Speed (MPH)": "60 mph",
-            "Response Time (1 Mile) (sec)": "36 sec",
-            "Real-world On-scene Time (min)": "50 min",
-            "Hit License Plate at 400ft Alt": "1000 ft",
-            "Effectively Fly at 400ft Alt": "Yes",
-            "Night Vision": "Yes",
-            "Integrations": "Flock911 AD, Flock LPR, Flock NOVA, Flock Audio, CAD, Inflight LPR, Flock OS / Fusus, Evidence.com",
-        },
-    },
-    "Flock Aerodome Delta": {
-        "price_per_dock": 300000,
-        "docks_per_location": 1,
-        "range_mi": 15.0,
-        "specs": {
-            "Pricing / Dock / Year (2-Year Contract)": "$300,000",
-            "Number of Docks / Location": "1",
-            "Real-world Speed (MPH)": "100 mph",
-            "Response Time (1 Mile) (sec)": "24 sec",
-            "Real-world On-scene Time (min)": "120 min",
-            "Hit License Plate at 400ft Alt": "1000 ft",
-            "Effectively Fly at 400ft Alt": "Yes",
-            "Night Vision": "Yes",
-            "Integrations": "Flock911 AD, Flock LPR, Flock NOVA, Flock Audio, CAD, Inflight LPR, Flock OS / Fusus, Evidence.com",
-        },
-    },
-    # Competitors
-    "Skydio X10": {
-        "price_per_dock": 50000,
-        "docks_per_location": 3,
-        "range_mi": 2.0,
-        "specs": {
-            "Pricing / Dock / Year (2-Year Contract)": "$50,000",
-            "Number of Docks / Location": "3",
-            "Real-world Speed (MPH)": "30 mph",
-            "Response Time (1 Mile) (sec)": "157 sec",
-            "Real-world On-scene Time (min)": "15 min",
-            "Hit License Plate at 400ft Alt": "300 ft",
-            "Effectively Fly at 400ft Alt": "No",
-            "Night Vision": "No",
-            "Integrations": "Evidence.com, Flock OS / Fusus",
-        },
-    },
-    "Brinc Responder": {
-        "price_per_dock": 75000,
-        "docks_per_location": 3,
-        "range_mi": 2.0,
-        "specs": {
-            "Pricing / Dock / Year (2-Year Contract)": "$75,000",
-            "Number of Docks / Location": "3",
-            "Real-world Speed (MPH)": "30 mph",
-            "Response Time (1 Mile) (sec)": "157 sec",
-            "Real-world On-scene Time (min)": "15 min",
-            "Hit License Plate at 400ft Alt": "200 ft",
-            "Effectively Fly at 400ft Alt": "No",
-            "Night Vision": "No",
-            "Integrations": "None",
-        },
-    },
-    "Paladin Dock 3": {
-        "price_per_dock": 50000,
-        "docks_per_location": 2,
-        "range_mi": 2.0,
-        "specs": {
-            "Pricing / Dock / Year (2-Year Contract)": "$50,000",
-            "Number of Docks / Location": "2",
-            "Real-world Speed (MPH)": "33 mph",
-            "Response Time (1 Mile) (sec)": "61 sec",
-            "Real-world On-scene Time (min)": "35 min",
-            "Hit License Plate at 400ft Alt": "700 ft",
-            "Effectively Fly at 400ft Alt": "No",
-            "Night Vision": "Yes",
-            "Integrations": "None",
-        },
-    },
-    "Dronesense Dock 3": {
-        "price_per_dock": 40000,
-        "docks_per_location": 2,
-        "range_mi": 2.0,
-        "specs": {
-            "Pricing / Dock / Year (2-Year Contract)": "$40,000",
-            "Number of Docks / Location": "2",
-            "Real-world Speed (MPH)": "33 mph",
-            "Response Time (1 Mile) (sec)": "61 sec",
-            "Real-world On-scene Time (min)": "40 min",
-            "Hit License Plate at 400ft Alt": "700 ft",
-            "Effectively Fly at 400ft Alt": "Yes",
-            "Night Vision": "Yes",
-            "Integrations": "Axon Air, Evidence.com, Flock OS / Fusus",
-        },
-    },
-}
-
-COMPETITOR_OPTIONS = [
-    "Skydio X10",
-    "Brinc Responder",
-    "Paladin Dock 3",
-    "Dronesense Dock 3",
-]
+    if poly_utm.geom_type == "MultiPolygon":
+        poly_utm = max(poly_utm.geoms, key=lambda p: p.area)
+    xs, ys = poly_utm.exterior.coords.xy
+    lat, lon = _unproject_points(inv, np.asarray(xs), np.asarray(ys))
+    return list(zip(lat.tolist(), lon.tolist()))
 
 # ---------------- Pull counts & detected dock types from Launch CSV ----------
 def _get_col(df, *names):
@@ -2059,7 +1876,6 @@ launch_count = len(launch_rows)
 total_docks  = int(pd.to_numeric(docks_col, errors="coerce").fillna(0).sum()) if docks_col is not None else 0
 total_radars = int(pd.to_numeric(radars_col, errors="coerce").fillna(0).sum()) if radars_col is not None else 0
 
-# Default to Dock 3 when dock type cell is blank; normalize to our keys
 def _normalized_dock_types():
     if dock_type_col is None or dock_type_col.empty:
         return ["Flock Aerodome Dock 3"]
@@ -2079,26 +1895,24 @@ detected_types_list = sorted(set(_normalized_dock_types()))
 is_multi = len(detected_types_list) > 1
 aerodome_title = f"Flock Aerodome — {'Multi-platform' if is_multi else detected_types_list[0].split('Flock Aerodome ',1)[-1]}"
 
-# Effective range for *our* coverage estimate (use max detected)
+# Effective range & area estimates
 our_eff_range = max(PLATFORMS[t]["range_mi"] for t in detected_types_list) if detected_types_list else 3.5
 OUR_AREA_SQMI_EST = len(launch_coords) * math.pi * (our_eff_range ** 2)
 
-# Build call-derived "city coverage" polygon
-calls_poly_utm, CALLS_AREA_SQMI = calls_concave_hull_utm(
-    lat=df_all["lat"].values, lon=df_all["lon"].values,
+# Build polygons
+calls_poly_utm, CALLS_AREA_SQMI, (fwd_calls, inv_calls) = calls_concave_hull_utm(
+    df_all["lat"].values, df_all["lon"].values,
     eps_m=1500, min_samples=20
 )
-
-# Build our-coverage polygon = union of our launch circles
 our_poly_utm, OUR_CIRCLES_AREA_SQMI = union_launch_circles_utm(
-    launch_coords, our_eff_range
+    launch_coords, our_eff_range, fwd_calls
 )
 
-# Choose placement mask:
-# default = city coverage from calls; if our coverage is smaller, constrain to ours
+# First target decision (for caption)
 if calls_poly_utm is None:
     PLACEMENT_POLY_UTM = our_poly_utm
     TARGET_AREA_SQMI = OUR_CIRCLES_AREA_SQMI
+    target_label = f"Target area (fallback to our coverage): {TARGET_AREA_SQMI:.2f} sq mi"
 else:
     if OUR_CIRCLES_AREA_SQMI < CALLS_AREA_SQMI:
         PLACEMENT_POLY_UTM = our_poly_utm
@@ -2110,105 +1924,70 @@ else:
         target_label = f"Target area (call-derived city): {TARGET_AREA_SQMI:.2f} sq mi"
 st.caption(target_label)
 
-# ---------------- City limits default (from call data hull) + optional overrides --------------
-# Default "city area" comes from call-derived concave hull if we built one.
+# ---------------- City limits default (sidebar overrides) --------------------
 CITY_AREA_SQMI_DEFAULT = float(CALLS_AREA_SQMI) if (CALLS_AREA_SQMI and CALLS_AREA_SQMI > 0) else None
 
-# Helper: optional Wikidata lookup (kept as an override, not the default)
-def wikidata_city_area_sqmi(city_query: str) -> float | None:
-    try:
-        r = requests.get(
-            "https://www.wikidata.org/w/api.php",
-            params={
-                "action": "wbsearchentities", "search": city_query,
-                "language": "en", "type": "item", "format": "json", "limit": 5
-            },
-            timeout=10,
-        )
-        r.raise_for_status()
-        hits = r.json().get("search", [])
-        if not hits:
-            return None
-        pick = None
-        for h in hits:
-            desc = (h.get("description") or "").lower()
-            if "city" in desc or "town" in desc or "municipality" in desc:
-                pick = h; break
-        pick = pick or hits[0]
-        qid = pick["id"]
-
-        r2 = requests.get(f"https://www.wikidata.org/wiki/Special:EntityData/{qid}.json", timeout=10)
-        r2.raise_for_status()
-        ent = list(r2.json()["entities"].values())[0]
-        areas = ent.get("claims", {}).get("P2046", [])
-        if not areas:
-            return None
-
-        def _amount_sqmi(claim):
-            v = claim.get("mainsnak", {}).get("datavalue", {}).get("value", {})
-            amount = float(str(v.get("amount", "0")).replace("+", ""))
-            unit = v.get("unit", "")
-            # assume square meters if unit missing/odd
-            return amount / 2_589_988.110336
-
-        preferred = [c for c in areas if c.get("rank") == "preferred"] or areas
-        return _amount_sqmi(preferred[0])
-    except Exception:
-        return None
-
 with st.sidebar.expander("City limits (default = from call data)", expanded=False):
-    # Show what we detected from calls as the default
     if CITY_AREA_SQMI_DEFAULT:
         st.caption(f"Detected from call data hull: ~{CITY_AREA_SQMI_DEFAULT:.2f} sq mi")
     else:
         st.caption("Call-data hull unavailable (not enough points).")
 
-    # Optional: pull a wiki area if the user wants to compare/override
     city_query = st.text_input("(Optional) Search Wikidata city name (e.g., \"Boise, ID\")", key="cmp_city_query")
     if st.button("Fetch Wikidata area", use_container_width=True):
-        sqmi = wikidata_city_area_sqmi(city_query) if city_query else None
+        sqmi = None
+        try:
+            import requests
+            r = requests.get(
+                "https://www.wikidata.org/w/api.php",
+                params={"action":"wbsearchentities","search":city_query,"language":"en","type":"item","format":"json","limit":5},
+                timeout=10,
+            )
+            r.raise_for_status()
+            hits = r.json().get("search", [])
+            if hits:
+                pick = next((h for h in hits if "city" in (h.get("description","").lower())), hits[0])
+                qid = pick["id"]
+                r2 = requests.get(f"https://www.wikidata.org/wiki/Special:EntityData/{qid}.json", timeout=10)
+                r2.raise_for_status()
+                ent = list(r2.json()["entities"].values())[0]
+                areas = ent.get("claims", {}).get("P2046", [])
+                if areas:
+                    v = areas[0].get("mainsnak", {}).get("datavalue", {}).get("value", {})
+                    amount = float(str(v.get("amount","0")).replace("+",""))
+                    sqmi = amount / SQM_PER_SQMI
+        except Exception:
+            sqmi = None
+
         if sqmi:
             st.session_state["city_area_sqmi"] = float(sqmi)
             st.success(f"Wikidata area loaded: {sqmi:.2f} sq mi (override)")
         else:
             st.warning("Couldn’t find area automatically. You can enter a manual value below.")
 
-    # Manual override (prefilled with current chosen area, defaulting to call-data hull)
     current_default = st.session_state.get("city_area_sqmi", CITY_AREA_SQMI_DEFAULT or 0.0)
     manual_city_area = st.number_input(
         "City area (sq mi — leave as default to use call-data hull)",
-        value=float(current_default),
-        min_value=0.0, step=1.0, format="%.2f"
+        value=float(current_default), min_value=0.0, step=1.0, format="%.2f"
     )
     st.session_state["city_area_sqmi"] = manual_city_area
 
-# Choose the polygon we’ll use for placement masks (visuals) and the scalar area
-# we’ll use for competitor location math. By default we use the call-data hull.
 CITY_AREA_SQMI = float(st.session_state.get("city_area_sqmi", 0.0)) or None
 
-# Placement polygon (for competitor site placement) defaults to call hull if present;
-# else fall back to our union-of-circles coverage polygon.
+# Final placement polygon + scalar area used for competitor math
 if calls_poly_utm is not None:
     PLACEMENT_POLY_UTM = calls_poly_utm
     TARGET_AREA_SQMI = CITY_AREA_SQMI or CALLS_AREA_SQMI or OUR_AREA_SQMI_EST
     target_label = f"Target area (call-derived city limits): {TARGET_AREA_SQMI:.2f} sq mi"
 else:
     PLACEMENT_POLY_UTM = our_poly_utm
-    # If user typed an override, respect it; else use our coverage estimate
     TARGET_AREA_SQMI = CITY_AREA_SQMI or OUR_AREA_SQMI_EST
     target_label = f"Target area (our union-of-circles): {TARGET_AREA_SQMI:.2f} sq mi"
-
 st.caption(target_label)
 
-# ---------------- Aerodome yearly pricing (w/ optional discount) -------------
+# ---------------- Pricing (our side) ----------------
 RADAR_PRICE = 150000
-
-DOCK_PRICES = {
-    "Dock 3": 50000,
-    "Alpha": 125000,
-    "Delta": 300000,
-    "M350": 150000,
-}
+DOCK_PRICES = {"Dock 3": 50000, "Alpha": 125000, "Delta": 300000, "M350": 150000}
 
 def _dock_price_for_row(row):
     v = str(row.get(dock_type_col.name, "") if dock_type_col is not None else "").strip()
@@ -2228,19 +2007,16 @@ def compute_our_yearly_price(disc_fraction: float = 0.0):
     disc_total = int(round(base * (1.0 - disc_fraction))) if disc_fraction > 0 else None
     return disc_total, int(base)
 
-disc_pct = st.number_input("Discount (%)", min_value=0, max_value=100, value=0, step=1, help="Applies to Aerodome yearly cost only.")
+disc_pct = st.number_input("Discount (%)", min_value=0, max_value=100, value=0, step=1,
+                           help="Applies to Aerodome yearly cost only.")
 disc_fraction = float(disc_pct) / 100.0
 our_discounted, our_base = compute_our_yearly_price(disc_fraction)
 
-# ---------------- Competitor required locations & yearly cost ----------------
+# ---------------- Competitor math ----------------
 def circle_area_sqmi(radius_mi: float) -> float:
     return math.pi * (radius_mi ** 2)
 
 def round_locations(x: float) -> int:
-    """
-    Custom rounding: fractional part >= 0.35 -> ceil, else floor. Min 1.
-    Examples: 2.32 -> 2 ; 2.40 -> 3 ; 6.30 -> 6 ; 6.40 -> 7
-    """
     if x <= 1.0:
         return 1
     frac = x - math.floor(x)
@@ -2261,204 +2037,100 @@ def competitor_plan(comp_name: str, target_area_sqmi: float):
         "range_mi": cfg["range_mi"],
     }
 
-# Choose competitor
-comp_choice = st.selectbox("Compare against", COMPETITOR_OPTIONS, index=0)
+# ---------- Place competitor centers INSIDE polygon (KMeans on calls) ----------
+def place_sites_kmeans_in_polygon(lat, lon, polygon_utm, n_sites, fwd: Transformer, inv: Transformer, rng=42):
+    if polygon_utm is None or n_sites < 1 or fwd is None or inv is None:
+        return []
+    lat = pd.to_numeric(pd.Series(lat), errors="coerce")
+    lon = pd.to_numeric(pd.Series(lon), errors="coerce")
+    mask = lat.notna() & lon.notna()
+    if mask.sum() == 0:
+        return []
+    X, Y = _project_points(fwd, lat[mask].values, lon[mask].values)
+    pts_in = [(x, y) for x, y in zip(X, Y) if polygon_utm.contains(Point(float(x), float(y)))]
+    if not pts_in:
+        return []
+    XY = np.asarray(pts_in, dtype=float)
+    n = max(1, min(n_sites, len(XY)))
+    km = KMeans(n_clusters=n, n_init=10, random_state=rng).fit(XY)
+    cx, cy = km.cluster_centers_[:, 0], km.cluster_centers_[:, 1]
+    lat_c, lon_c = _unproject_points(inv, cx, cy)
+    return list(zip(lat_c.tolist(), lon_c.tolist()))
 
-# ---------------- Simple competitor map placement (placeholder) --------------
-def render_competitor_map(num_sites: int, range_mi: float, key: str, mode: str, our_range_for_mask: float):
-    """
-    mode: "our_coverage" -> only place sites that fall inside our union-of-circles.
-          "city"          -> free placement inside a single big 'target area' circle (current behavior).
-    our_range_for_mask: miles radius of our coverage circles (use our_eff_range).
-    """
-    # center choice
-    if not dfr_only.empty and dfr_only["lat"].notna().any() and dfr_only["lon"].notna().any():
-        lat0 = float(dfr_only["lat"].mean())
-        lon0 = float(dfr_only["lon"].mean())
-    elif launch_coords:
-        lat0, lon0 = launch_coords[0]
-    else:
-        lat0, lon0 = 0.0, 0.0
-
-    m = folium.Map(location=[lat0, lon0], zoom_start=11)
-
-    # visual circles we draw for competitor
-    site_radius_m = range_mi * 1609.34
-
-    # spacing between candidate centers so the red circles don’t stack
-    spacing_mi = range_mi * 1.6
-
-    # generate candidates around the center and filter per mode
-    chosen = []
-    for (lat, lon) in _grid_candidates(lat0, lon0, spacing_mi, need=num_sites, max_rings=12):
-        if mode == "our_coverage":
-            # keep only candidates INSIDE our union of circles
-            if not _in_our_coverage(lat, lon, launch_coords, our_range_for_mask):
-                continue
-        else:
-            # mode == "city": no additional mask (placeholder behavior)
-            pass
-
-        chosen.append((lat, lon))
-        if len(chosen) >= num_sites:
-            break
-
-    # If we still didn't get enough (tight mask), fallback: relax and accept nearest to our coverage boundary
-    if len(chosen) < num_sites and mode == "our_coverage" and launch_coords:
-        # just keep adding from the grid without the mask until full, but only if near coverage edge (<= 2 * our_range)
-        for (lat, lon) in _grid_candidates(lat0, lon0, spacing_mi, need=num_sites*2, max_rings=16):
-            if (lat, lon) in chosen:
-                continue
-            # near any coverage circle within 2x range
-            near = any(_haversine_mi(lat, lon, la, lo) <= our_range_for_mask*2 for (la, lo) in launch_coords)
-            if near:
-                chosen.append((lat, lon))
-            if len(chosen) >= num_sites:
-                break
-
-    # Draw circles
-    for (lat, lon) in chosen:
-        folium.Circle(
-            location=(lat, lon),
-            radius=site_radius_m,
-            color="red",
-            fill=False,
-            weight=3,
-            opacity=0.8,
-        ).add_to(m)
-        folium.CircleMarker(
-            location=(lat, lon),
-            radius=3,
-            color="red",
-            fill=True
-        ).add_to(m)
-
-    st_folium(m, width=800, height=500, key=key)
-
-# --- Helpers for masked competitor placement ---------------------------------
-def _haversine_mi(lat1, lon1, lat2, lon2):
-    R = 3958.8
-    p1, p2 = math.radians(lat1), math.radians(lat2)
-    dlat = p2 - p1
-    dlon = math.radians(lon2 - lon1)
-    a = math.sin(dlat/2)**2 + math.cos(p1)*math.cos(p2)*math.sin(dlon/2)**2
-    return 2 * R * math.asin(math.sqrt(a))
-
-def _in_our_coverage(lat, lon, launch_coords, our_range_mi):
-    """Inside ANY of our launch circles (union)."""
-    if not launch_coords:
-        return False
-    for la, lo in launch_coords:
-        if _haversine_mi(lat, lon, la, lo) <= our_range_mi:
-            return True
-    return False
-
-def _grid_candidates(center_lat, center_lon, spacing_mi, need, max_rings=8):
-    """Yield ~grid candidate centers around (center_lat, center_lon)."""
-    miles_per_deg_lat = 69.0
-    miles_per_deg_lon = 69.0 * max(0.1, math.cos(math.radians(center_lat)))
-    dlat = spacing_mi / miles_per_deg_lat
-    dlon = spacing_mi / miles_per_deg_lon
-
-    # grow rings until we have enough
-    yielded = 0
-    for ring in range(1, max_rings+1):
-        k = 2*ring + 1  # odd count per side (3,5,7…)
-        for i in range(k):
-            for j in range(k):
-                # center the grid on (0,0)
-                gi = i - (k-1)/2
-                gj = j - (k-1)/2
-                lat = center_lat + gi * dlat
-                lon = center_lon + gj * dlon
-                yield (lat, lon)
-                yielded += 1
-                if yielded >= need * 10:  # plenty of candidates
-                    return
-
-# ---------------- Panel renderer --------------------------------------------
+# ---------------- Panel renderer ----------------
 def panel(title, product_names_list, is_left=True, competitor=None):
     with st.container(border=True):
         st.subheader(title)
 
-        # Map
         if is_left:
+            # LEFT: our heatmap + blue range circles
             render_map(
-                all_dfr,
+                df_all,                         # ← if you prefer only DFR calls, change to dfr_only
                 heat=True,
                 heat_radius=8, heat_blur=12,
                 title="",
-                key=f"cmp_map_{'L'}_{title}",
+                key=f"cmp_map_L_{title}",
                 show_circle=True,
                 launch_coords=launch_coords
             )
         else:
+            # RIGHT: competitor centers chosen inside polygon via K-Means on calls
             plan = competitor_plan(competitor, TARGET_AREA_SQMI)
-            # Decide mapping mode:
-            # if the smaller target is OUR coverage -> constrain within our circles
-            mode = "our_coverage" if (CITY_AREA_SQMI is not None and CITY_AREA_SQMI > 0 and TARGET_AREA_SQMI == OUR_AREA_SQMI_EST) else "city"
-            render_competitor_map(
-                num_sites=plan["locations"],
-                range_mi=plan["range_mi"],
-                key=f"cmp_map_R_{title}",
-                mode=mode,
-                our_range_for_mask=our_eff_range
+            required_locs = plan["locations"]
+            comp_range_mi = plan["range_mi"]
+
+            fwd = fwd_calls if fwd_calls else _make_transformers(df_all["lat"].values, df_all["lon"].values)[0]
+            inv = inv_calls if inv_calls else _make_transformers(df_all["lat"].values, df_all["lon"].values)[1]
+            centers = place_sites_kmeans_in_polygon(
+                df_all["lat"].values, df_all["lon"].values,
+                PLACEMENT_POLY_UTM, n_sites=required_locs,
+                fwd=fwd, inv=inv
             )
 
-        # Headline stats row
-        c1, c2, c3 = st.columns(3)
-        if is_left:
-            # Our (Aerodome) metrics
-            c1.metric("Launch Locations", f"{launch_count:,}")
-            c2.metric("Total Docks", f"{total_docks:,}")
-            if disc_fraction > 0 and our_discounted is not None:
-                c3.metric("Yearly Cost (discounted)", f"${our_discounted:,}")
-                st.caption(f"Base price (pre-discount): ${our_base:,}")
+            if launch_coords:
+                lat0, lon0 = float(launch_coords[0][0]), float(launch_coords[0][1])
+            elif len(df_all) > 0:
+                lat0, lon0 = float(df_all["lat"].mean()), float(df_all["lon"].mean())
             else:
-                c3.metric("Yearly Cost", f"${our_base:,}")
-        # inside panel(...), competitor branch
-        else:
-            plan = competitor_plan(competitor, TARGET_AREA_SQMI)
-            comp_docks_per_loc = PLATFORMS[competitor]["docks_per_location"]
-            required_locs = plan["locations"]
-            total_comp_docks = required_locs * comp_docks_per_loc
-        
-            # NEW: pick site centers inside PLACEMENT_POLY_UTM
-            comp_centers = place_sites_kmeans_in_polygon(
-                df_all["lat"].values, df_all["lon"].values,
-                PLACEMENT_POLY_UTM, n_sites=required_locs
-            )
-        
-            # Draw a fresh map with those centers + circles
-            # (keeps your style; swap into render_map if you prefer)
-            center_for_map = launch_coords[0] if launch_coords else (df_all["lat"].mean(), df_all["lon"].mean())
-            m = folium.Map(location=[float(center_for_map[0]), float(center_for_map[1])], zoom_start=11)
-        
-            # draw circles
-            comp_r_m = PLATFORMS[competitor]["range_mi"] * 1609.34
-            for (la, lo) in comp_centers:
+                lat0, lon0 = 0.0, 0.0
+
+            m = folium.Map(location=[lat0, lon0], zoom_start=11)
+
+            # Red competitor circles
+            comp_r_m = comp_range_mi * 1609.34
+            for (la, lo) in centers:
                 folium.Circle(location=(la, lo), radius=comp_r_m, color="red", weight=3, fill=False).add_to(m)
-        
-            # (optional) also show our launch-range circle(s) faintly for context
+                folium.CircleMarker(location=(la, lo), radius=3, color="red", fill=True).add_to(m)
+
+            # Our blue coverage for context
             for la, lo in launch_coords:
-                folium.Circle(location=(la, lo), radius=our_eff_range * 1609.34, color="blue", weight=2, fill=False, opacity=0.4).add_to(m)
-        
-            st_folium(m, width=800, height=500, key=f"cmp_comp_map_{competitor}")
-        
+                folium.Circle(location=(la, lo), radius=our_eff_range * 1609.34, color="blue", weight=2, fill=False, opacity=0.35).add_to(m)
+
+            # City-limits outline (purple)
+            outline_latlon = polygon_outline_latlon(PLACEMENT_POLY_UTM, inv_calls)
+            if outline_latlon:
+                folium.PolyLine(locations=[(lt, ln) for lt, ln in outline_latlon],
+                                color="purple", weight=4, opacity=0.8).add_to(m)
+
+            st_folium(m, width=800, height=500, key=f"cmp_map_R_{competitor}")
+
             # Headline metrics
+            comp_docks_per_loc = PLATFORMS[competitor]["docks_per_location"]
+            total_comp_docks = required_locs * comp_docks_per_loc
             c1, c2, c3 = st.columns(3)
             c1.metric("Required Locations", f"{required_locs:,}")
             c2.metric("Total Docks", f"{total_comp_docks:,}")
             c3.metric("Yearly Cost", f"${plan['yearly_cost']:,}")
             st.caption(
-                f"Docks per location: {comp_docks_per_loc} • "
+                f"Docks/location: {comp_docks_per_loc} • "
                 f"Per-location area: {plan['per_location_area_sqmi']:.2f} sq mi • "
-                f"Price/dock: ${plan['price_per_dock']:,}"
+                f"Radius: {comp_range_mi:.2f} mi"
             )
-        # Spec list (exact order you provided)
+
+        # Specs list
         def render_specs(pname: str):
             specs = PLATFORMS[pname]["specs"]
-            rows_in_order = [
+            rows = [
                 "Pricing / Dock / Year (2-Year Contract)",
                 "Number of Docks / Location",
                 "Real-world Speed (MPH)",
@@ -2469,34 +2141,29 @@ def panel(title, product_names_list, is_left=True, competitor=None):
                 "Night Vision",
                 "Integrations",
             ]
-            for r in rows_in_order:
+            for r in rows:
                 if r in specs:
                     st.write(f"**{r}**: {specs[r]}")
 
-        if is_left:
-            # Aerodome: show all detected platforms if multi; otherwise the single
-            if is_multi:
+        if is_multi:
+            if is_left:
                 st.markdown("**Detected Aerodome Platforms:** " + ", ".join(detected_types_list))
                 for p in detected_types_list:
                     st.markdown(f"**{p}**")
                     render_specs(p)
                     st.markdown("---")
-            else:
-                render_specs(product_names_list[0])
         else:
-            render_specs(competitor)
+            render_specs(product_names_list[0] if product_names_list else competitor)
 
-# ---------------- Two columns: Aerodome vs. Competitor -----------------------
+# ---- Two columns: Aerodome vs Competitor -----------------------------------
 L, R = st.columns(2)
 with L:
     panel(aerodome_title, detected_types_list if is_multi else detected_types_list[:1], is_left=True)
-
 with R:
     comp_choice = st.selectbox("Compare against", COMPETITOR_OPTIONS, index=0, key="cmp_choice")
     panel(comp_choice, [], is_left=False, competitor=comp_choice)
 
 st.caption(
-    "Note: Competitor circles are placeholder placements to visualize count & radius. "
-    "Estimated locations and yearly cost are computed from target area (smaller of city area or our estimated coverage), "
-    "each platform’s effective range, docks per location, and price per dock."
+    "City limits default to a concave hull from call locations (no GeoPandas). "
+    "Competitor counts use that area; sites are placed inside the polygon via K-Means over call density."
 )
