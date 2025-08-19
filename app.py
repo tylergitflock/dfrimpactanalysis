@@ -2068,14 +2068,13 @@ def competitor_plan(comp_name: str, target_area_sqmi: float):
 comp_choice = st.selectbox("Compare against", COMPETITOR_OPTIONS, index=0)
 
 # ---------------- Simple competitor map placement (placeholder) --------------
-def render_competitor_map(num_sites: int, range_mi: float, key: str):
+def render_competitor_map(num_sites: int, range_mi: float, key: str, mode: str, our_range_for_mask: float):
     """
-    Placeholder visual: place the required number of coverage circles in a tidy grid
-    around the project center (mean of DFR points or first launch coord).
-    Purpose: accurately *show count & radius* now; we’ll replace with jurisdiction-
-    true placement later when we add polygon-aware packing.
+    mode: "our_coverage" -> only place sites that fall inside our union-of-circles.
+          "city"          -> free placement inside a single big 'target area' circle (current behavior).
+    our_range_for_mask: miles radius of our coverage circles (use our_eff_range).
     """
-    # center
+    # center choice
     if not dfr_only.empty and dfr_only["lat"].notna().any() and dfr_only["lon"].notna().any():
         lat0 = float(dfr_only["lat"].mean())
         lon0 = float(dfr_only["lon"].mean())
@@ -2086,26 +2085,45 @@ def render_competitor_map(num_sites: int, range_mi: float, key: str):
 
     m = folium.Map(location=[lat0, lon0], zoom_start=11)
 
-    # miles -> degrees approx
-    miles_per_deg_lat = 69.0
-    miles_per_deg_lon = 69.0 * max(0.1, math.cos(math.radians(lat0)))
-    # spacing between centers so circles don’t overlap much
+    # visual circles we draw for competitor
+    site_radius_m = range_mi * 1609.34
+
+    # spacing between candidate centers so the red circles don’t stack
     spacing_mi = range_mi * 1.6
-    dlat = spacing_mi / miles_per_deg_lat
-    dlon = spacing_mi / miles_per_deg_lon
 
-    # arrange in square grid centered at (lat0, lon0)
-    k = math.ceil(math.sqrt(max(1, num_sites)))
-    # center grid indices around zero
-    idxs = [(i - (k-1)/2, j - (k-1)/2) for i in range(k) for j in range(k)]
-    idxs = idxs[:num_sites]
+    # generate candidates around the center and filter per mode
+    chosen = []
+    for (lat, lon) in _grid_candidates(lat0, lon0, spacing_mi, need=num_sites, max_rings=12):
+        if mode == "our_coverage":
+            # keep only candidates INSIDE our union of circles
+            if not _in_our_coverage(lat, lon, launch_coords, our_range_for_mask):
+                continue
+        else:
+            # mode == "city": no additional mask (placeholder behavior)
+            pass
 
-    for (gi, gj) in idxs:
-        lat = lat0 + gi * dlat
-        lon = lon0 + gj * dlon
+        chosen.append((lat, lon))
+        if len(chosen) >= num_sites:
+            break
+
+    # If we still didn't get enough (tight mask), fallback: relax and accept nearest to our coverage boundary
+    if len(chosen) < num_sites and mode == "our_coverage" and launch_coords:
+        # just keep adding from the grid without the mask until full, but only if near coverage edge (<= 2 * our_range)
+        for (lat, lon) in _grid_candidates(lat0, lon0, spacing_mi, need=num_sites*2, max_rings=16):
+            if (lat, lon) in chosen:
+                continue
+            # near any coverage circle within 2x range
+            near = any(_haversine_mi(lat, lon, la, lo) <= our_range_for_mask*2 for (la, lo) in launch_coords)
+            if near:
+                chosen.append((lat, lon))
+            if len(chosen) >= num_sites:
+                break
+
+    # Draw circles
+    for (lat, lon) in chosen:
         folium.Circle(
             location=(lat, lon),
-            radius=range_mi * 1609.34,
+            radius=site_radius_m,
             color="red",
             fill=False,
             weight=3,
@@ -2119,6 +2137,47 @@ def render_competitor_map(num_sites: int, range_mi: float, key: str):
         ).add_to(m)
 
     st_folium(m, width=800, height=500, key=key)
+
+# --- Helpers for masked competitor placement ---------------------------------
+def _haversine_mi(lat1, lon1, lat2, lon2):
+    R = 3958.8
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dlat = p2 - p1
+    dlon = math.radians(lon2 - lon1)
+    a = math.sin(dlat/2)**2 + math.cos(p1)*math.cos(p2)*math.sin(dlon/2)**2
+    return 2 * R * math.asin(math.sqrt(a))
+
+def _in_our_coverage(lat, lon, launch_coords, our_range_mi):
+    """Inside ANY of our launch circles (union)."""
+    if not launch_coords:
+        return False
+    for la, lo in launch_coords:
+        if _haversine_mi(lat, lon, la, lo) <= our_range_mi:
+            return True
+    return False
+
+def _grid_candidates(center_lat, center_lon, spacing_mi, need, max_rings=8):
+    """Yield ~grid candidate centers around (center_lat, center_lon)."""
+    miles_per_deg_lat = 69.0
+    miles_per_deg_lon = 69.0 * max(0.1, math.cos(math.radians(center_lat)))
+    dlat = spacing_mi / miles_per_deg_lat
+    dlon = spacing_mi / miles_per_deg_lon
+
+    # grow rings until we have enough
+    yielded = 0
+    for ring in range(1, max_rings+1):
+        k = 2*ring + 1  # odd count per side (3,5,7…)
+        for i in range(k):
+            for j in range(k):
+                # center the grid on (0,0)
+                gi = i - (k-1)/2
+                gj = j - (k-1)/2
+                lat = center_lat + gi * dlat
+                lon = center_lon + gj * dlon
+                yield (lat, lon)
+                yielded += 1
+                if yielded >= need * 10:  # plenty of candidates
+                    return
 
 # ---------------- Panel renderer --------------------------------------------
 def panel(title, product_names_list, is_left=True, competitor=None):
@@ -2138,10 +2197,15 @@ def panel(title, product_names_list, is_left=True, competitor=None):
             )
         else:
             plan = competitor_plan(competitor, TARGET_AREA_SQMI)
+            # Decide mapping mode:
+            # if the smaller target is OUR coverage -> constrain within our circles
+            mode = "our_coverage" if (CITY_AREA_SQMI is not None and CITY_AREA_SQMI > 0 and TARGET_AREA_SQMI == OUR_AREA_SQMI_EST) else "city"
             render_competitor_map(
                 num_sites=plan["locations"],
                 range_mi=plan["range_mi"],
-                key=f"cmp_map_R_{title}"
+                key=f"cmp_map_R_{title}",
+                mode=mode,
+                our_range_for_mask=our_eff_range
             )
 
         # Headline stats row
