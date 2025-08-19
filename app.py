@@ -1744,3 +1744,103 @@ with st.expander("Per-site pricing details"):
         f"List={_fmt_usd(list_total)} • Discount={_fmt_usd(discount_amount)} • "
         f"Discounted Total={_fmt_usd(discounted_total)}"
     )
+
+# ─── COMPARISON SECTION ──────────────────────────────────────────────────────
+st.header("📊 Platform Comparison")
+
+# Load competitor specs from CSV
+try:
+    specs_df = pd.read_csv("Specs and Pricing - Specs and Pricing.csv")
+except Exception as e:
+    st.error(f"Could not load specs CSV: {e}")
+    specs_df = None
+
+if specs_df is not None:
+    # Our platform (left-hand side)
+    st.subheader("Flock Aerodome (Our Platform)")
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.markdown("### Flock Aerodome")
+        # Map placeholder (later: render properly)
+        st.map(launch_df[["Lat", "Lon"]])  # placeholder for left map
+
+        # Launch stats
+        launch_count = len(launch_df) if launch_df is not None else 0
+        docks_count = (
+            launch_df["Number of Docks"].sum() if "Number of Docks" in launch_df else 0
+        )
+        radars_count = (
+            launch_df["Number of Radar"].sum() if "Number of Radar" in launch_df else 0
+        )
+
+        # Use Dock Type or default to Dock 3
+        dock_types = (
+            launch_df["Dock Type"].fillna("Dock 3").unique().tolist()
+            if "Dock Type" in launch_df
+            else ["Dock 3"]
+        )
+
+        # Pricing
+        PRICES = {"Dock 3": 50000, "Alpha": 125000, "Delta": 300000, "M350": 0}  
+        RADAR_PRICE = 150000
+
+        yearly_cost = (
+            sum(PRICES.get(dt, PRICES["Dock 3"]) for dt in dock_types) * docks_count
+        ) + (radars_count * RADAR_PRICE)
+
+        st.metric("Launch Locations", launch_count)
+        st.metric("Total Docks", docks_count)
+        st.metric("Yearly Cost", f"${yearly_cost:,.0f}")
+
+        # Our specs (from CSV first row where Platform == "Flock Aerodome Delta")
+        our_specs = specs_df[specs_df["Platform"].str.contains("Flock Aerodome")].iloc[0]
+        st.write("#### Platform Specs")
+        for spec in [
+            "Pricing / Dock",
+            "Number of Docks / Location",
+            "Real-world Speed",
+            "Response Time (1 Mile)",
+            "Real-world On Scene Time",
+            "Hit License Plate at 400ft Alt",
+            "Effectively Fly at 400ft Alt",
+            "Night Vision",
+            "Integrations",
+        ]:
+            val = our_specs.get(spec, "N/A")
+            st.write(f"**{spec}:** {val}")
+
+    # Competitor (right-hand side)
+    with col2:
+        competitor_options = specs_df[
+            ~specs_df["Platform"].str.contains("Flock Aerodome")
+        ]["Platform"].tolist()
+
+        selected_competitor = st.selectbox(
+            "Select Competitor", competitor_options, index=0
+        )
+
+        st.markdown(f"### {selected_competitor}")
+        st.map(launch_df[["Lat", "Lon"]])  # placeholder for right map
+
+        # Competitor specs
+        comp_specs = specs_df[specs_df["Platform"] == selected_competitor].iloc[0]
+
+        st.metric("Launch Locations", "N/A")  # no launch CSV for competitors yet
+        st.metric("Total Docks", comp_specs.get("Number of Docks / Location", "N/A"))
+        st.metric("Yearly Cost", comp_specs.get("Pricing / Dock", "N/A"))
+
+        st.write("#### Platform Specs")
+        for spec in [
+            "Pricing / Dock",
+            "Number of Docks / Location",
+            "Real-world Speed",
+            "Response Time (1 Mile)",
+            "Real-world On Scene Time",
+            "Hit License Plate at 400ft Alt",
+            "Effectively Fly at 400ft Alt",
+            "Night Vision",
+            "Integrations",
+        ]:
+            val = comp_specs.get(spec, "N/A")
+            st.write(f"**{spec}:** {val}")
