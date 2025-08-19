@@ -92,6 +92,16 @@ def _read_bytes(path):
     with open(path, "rb") as f:
         return BytesIO(f.read())
 
+def extract_agency_name(zip_filename: str) -> str:
+    """
+    From 'Fort Worth PD - ZIP.zip' -> 'Fort Worth PD'.
+    Falls back to the stem if ' - ' isn't present.
+    """
+    if not zip_filename:
+        return ""
+    base = os.path.basename(zip_filename)
+    stem = os.path.splitext(base)[0]
+    return stem.split(" - ")[0].strip() if " - " in stem else stem.strip()
 
 # === REPLAY: single canonical loader (PUT THIS ONCE, HERE) ===================
 REPLAY = st.session_state.get("replay_dir")
@@ -371,6 +381,7 @@ if bundle_zip_file is not None:
             for name in zf.namelist()
             if name.lower().endswith(".csv")
         }
+    st.session_state["agency_name_guess"] = extract_agency_name(bundle_zip_file.name)
     st.sidebar.success("ZIP file processed — files loaded into their sections below.")
 
 # 0c) Pre-populate replay_inputs from ZIP (no-ops if no ZIP)
@@ -380,8 +391,30 @@ replay_inputs["launch"] = _find_csv_by_partial("Launch Locations")
 replay_inputs["alpr"]   = _find_csv_by_partial("LPR Hits by Camera")
 replay_inputs["audio"]  = _find_csv_by_partial("Audio Hits Aggregated")
 
+# ─── 0d) Agency Name (from ZIP name or manual) ───────────────────────────────
+st.sidebar.header("2) Agency Name")
+
+# We stored the guess during ZIP parsing:
+zip_agency = st.session_state.get("agency_name_guess", "")
+
+# Keep a single source of truth in session_state; manual entry defaults to ZIP guess
+st.session_state["manual_agency_name"] = st.sidebar.text_input(
+    "Enter Agency Name",
+    value=st.session_state.get("manual_agency_name", zip_agency),
+    key="manual_agency_name"
+)
+
+AGENCY_NAME = st.session_state["manual_agency_name"].strip()
+
+# Render heading: agency above the analysis title
+if AGENCY_NAME:
+    st.markdown(f"# {AGENCY_NAME}")
+    st.markdown("## DFR Impact Analysis")
+else:
+    st.title("DFR Impact Analysis")
+
 # ─── 1) SIDEBAR: UPLOADS & EDITORS ───────────────────────────────────────────
-st.title("DFR Impact Analysis")
+
 
 # RAW
 st.sidebar.header("1) Raw Call Data")
@@ -623,9 +656,12 @@ progress.progress(70)
 
 # ─── Agency details (saved with each run) ────────────────────────────────────
 with st.sidebar.expander("Agency details", expanded=True):
-    agency_name = st.text_input("Agency name", value="", placeholder="e.g., Fort Worth PD")
+   agency_name = st.text_input("Agency name",
+                            value=st.session_state.get("manual_agency_name", ""),
+                            placeholder="e.g., Fort Worth PD")
     analyst_name = st.text_input("Analyst (optional)", value="")
     run_notes = st.text_area("Run notes (optional)", height=80)
+agency_name = agency_name or st.session_state.get("manual_agency_name", "")
 
 st.sidebar.header("5) ALPR & Audio (optional)")
 
