@@ -409,26 +409,6 @@ replay_inputs["launch"] = _find_csv_by_partial("Launch Locations")
 replay_inputs["alpr"]   = _find_csv_by_partial("LPR Hits by Camera")
 replay_inputs["audio"]  = _find_csv_by_partial("Audio Hits Aggregated")
 
-# ─── 0d) Agency Name (from ZIP name or manual) ───────────────────────────────
-st.sidebar.header("2) Agency Name")
-
-# We stored the guess during ZIP parsing:
-zip_agency = st.session_state.get("agency_name_guess", "")
-
-# Bind the widget to session state (do NOT assign the return value yourself)
-st.sidebar.text_input(
-    "Enter Agency Name",
-    value=st.session_state.get("manual_agency_name", zip_agency),
-    key="manual_agency_name"
-)
-
-AGENCY_NAME = st.session_state.get("manual_agency_name", "").strip()
-
-# Render heading: agency above the analysis title
-if AGENCY_NAME:
-    st.markdown(f"# {AGENCY_NAME}")
-    st.markdown("## DFR Impact Analysis")
-
 # ─── 1) SIDEBAR: UPLOADS & EDITORS ───────────────────────────────────────────
 
 
@@ -674,10 +654,6 @@ progress.progress(70)
 with st.sidebar.expander("Agency details", expanded=True):
     analyst_name = st.text_input("Analyst (optional)", value="", key="analyst_name")
     run_notes = st.text_area("Run notes (optional)", height=80, key="run_notes")
-
-# Resolve and keep everything in sync
-agency_name = (agency_name or st.session_state.get("manual_agency_name", "")).strip()
-st.session_state["manual_agency_name"] = agency_name
 
 st.sidebar.header("5) ALPR & Audio (optional)")
 
