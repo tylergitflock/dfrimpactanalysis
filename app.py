@@ -1884,13 +1884,6 @@ PLATFORMS = {
     },
 }
 
-AERODOME_OPTIONS = [
-    "Flock Aerodome M350",
-    "Flock Aerodome Dock 3",
-    "Flock Aerodome Alpha",
-    "Flock Aerodome Delta",
-]
-
 COMPETITOR_OPTIONS = [
     "Skydio X10",
     "Brinc Responder",
@@ -1915,18 +1908,17 @@ launch_count = len(launch_rows)
 total_docks  = int(pd.to_numeric(docks_col, errors="coerce").fillna(0).sum()) if docks_col is not None else 0
 total_radars = int(pd.to_numeric(radars_col, errors="coerce").fillna(0).sum()) if radars_col is not None else 0
 
-# Default to Dock 3 when dock type cell is blank
+# Default to Dock 3 when dock type cell is blank; normalize to our keys
 def _normalized_dock_types():
     if dock_type_col is None or dock_type_col.empty:
         return ["Flock Aerodome Dock 3"]
     vals = dock_type_col.astype(str).fillna("").str.strip()
     vals = vals.replace("", "Flock Aerodome Dock 3")
-    # Normalize to one of our keys
     out = []
     for v in vals:
         v2 = v.replace("Flock Aerodome ", "").strip()
         if v2.upper() in ["M350", "DOCK 3", "ALPHA", "DELTA"]:
-            label = f"Flock Aerodome {v2.title() if v2!='DOCK 3' else 'Dock 3'}"
+            label = f"Flock Aerodome {('Dock 3' if v2.upper() == 'DOCK 3' else v2.upper().title())}"
         else:
             label = "Flock Aerodome Dock 3"
         out.append(label)
@@ -1936,57 +1928,46 @@ detected_types_list = sorted(set(_normalized_dock_types()))
 is_multi = len(detected_types_list) > 1
 aerodome_title = f"Flock Aerodome — {'Multi-platform' if is_multi else detected_types_list[0].split('Flock Aerodome ',1)[-1]}"
 
-# Effective range for *our* coverage estimate
-our_eff_range = 15.0 if any("Delta" in t for t in detected_types_list) else 3.5
+# Effective range for *our* coverage estimate (use max detected)
+our_eff_range = max(PLATFORMS[t]["range_mi"] for t in detected_types_list) if detected_types_list else 3.5
 OUR_AREA_SQMI_EST = len(launch_coords) * math.pi * (our_eff_range ** 2)
 
 # ---------------- City area lookup (Wikidata) + manual override --------------
 def wikidata_city_area_sqmi(city_query: str) -> float | None:
     try:
-        # 1) search for entity
         r = requests.get(
             "https://www.wikidata.org/w/api.php",
-            params={"action": "wbsearchentities", "search": city_query, "language": "en", "type": "item", "format": "json", "limit": 5},
+            params={
+                "action": "wbsearchentities", "search": city_query,
+                "language": "en", "type": "item", "format": "json", "limit": 5
+            },
             timeout=10,
         )
         r.raise_for_status()
         hits = r.json().get("search", [])
         if not hits:
             return None
-        # pick first that looks like a city
         pick = None
         for h in hits:
             desc = (h.get("description") or "").lower()
             if "city" in desc or "town" in desc or "municipality" in desc:
-                pick = h
-                break
-        if pick is None:
-            pick = hits[0]
+                pick = h; break
+        pick = pick or hits[0]
         qid = pick["id"]
 
-        # 2) fetch entity data and read P2046 (area)
         r2 = requests.get(f"https://www.wikidata.org/wiki/Special:EntityData/{qid}.json", timeout=10)
         r2.raise_for_status()
         ent = list(r2.json()["entities"].values())[0]
-        claims = ent.get("claims", {})
-        areas = claims.get("P2046", [])
+        areas = ent.get("claims", {}).get("P2046", [])
         if not areas:
             return None
 
-        # prefer 'preferred' rank, else first normal
         def _amount_sqmi(claim):
-            mainsnak = claim.get("mainsnak", {})
-            dv = mainsnak.get("datavalue", {})
-            v = dv.get("value", {})
-            amount = float(v.get("amount", "0").replace("+", ""))
+            v = claim.get("mainsnak", {}).get("datavalue", {}).get("value", {})
+            amount = float(str(v.get("amount", "0")).replace("+", ""))
             unit = v.get("unit", "")
-            # Wikidata stores area in square meters typically
-            if unit.endswith("/Q25343"):  # square metre
-                sqmi = amount / 2_589_988.110336
-            else:
-                # fallback assume square meters
-                sqmi = amount / 2_589_988.110336
-            return sqmi
+            # assume square meters if unit missing/odd
+            return amount / 2_589_988.110336
 
         preferred = [c for c in areas if c.get("rank") == "preferred"] or areas
         return _amount_sqmi(preferred[0])
@@ -2023,7 +2004,7 @@ else:
 st.caption(target_label)
 
 # ---------------- Aerodome yearly pricing (w/ optional discount) -------------
-RADAR_PRICE = 150000  # your earlier constant
+RADAR_PRICE = 150000
 
 DOCK_PRICES = {
     "Dock 3": 50000,
@@ -2047,8 +2028,8 @@ def compute_our_yearly_price(disc_fraction: float = 0.0):
         _rows["_radars"] = pd.to_numeric(radars_col, errors="coerce").fillna(0) if radars_col is not None else 0
         _rows["_dock_price"] = _rows.apply(_dock_price_for_row, axis=1)
         base = int((_rows["_docks"] * _rows["_dock_price"]).sum() + _rows["_radars"].sum() * RADAR_PRICE)
-    return (int(round(base * (1.0 - disc_fraction))) if disc_fraction > 0 else None,
-            int(base))
+    disc_total = int(round(base * (1.0 - disc_fraction))) if disc_fraction > 0 else None
+    return disc_total, int(base)
 
 disc_pct = st.number_input("Discount (%)", min_value=0, max_value=100, value=0, step=1, help="Applies to Aerodome yearly cost only.")
 disc_fraction = float(disc_pct) / 100.0
@@ -2080,26 +2061,88 @@ def competitor_plan(comp_name: str, target_area_sqmi: float):
         "per_location_area_sqmi": per_loc_area,
         "docks_per_location": cfg["docks_per_location"],
         "price_per_dock": cfg["price_per_dock"],
+        "range_mi": cfg["range_mi"],
     }
 
 # Choose competitor
 comp_choice = st.selectbox("Compare against", COMPETITOR_OPTIONS, index=0)
+
+# ---------------- Simple competitor map placement (placeholder) --------------
+def render_competitor_map(num_sites: int, range_mi: float, key: str):
+    """
+    Placeholder visual: place the required number of coverage circles in a tidy grid
+    around the project center (mean of DFR points or first launch coord).
+    Purpose: accurately *show count & radius* now; we’ll replace with jurisdiction-
+    true placement later when we add polygon-aware packing.
+    """
+    # center
+    if not dfr_only.empty and dfr_only["lat"].notna().any() and dfr_only["lon"].notna().any():
+        lat0 = float(dfr_only["lat"].mean())
+        lon0 = float(dfr_only["lon"].mean())
+    elif launch_coords:
+        lat0, lon0 = launch_coords[0]
+    else:
+        lat0, lon0 = 0.0, 0.0
+
+    m = folium.Map(location=[lat0, lon0], zoom_start=11)
+
+    # miles -> degrees approx
+    miles_per_deg_lat = 69.0
+    miles_per_deg_lon = 69.0 * max(0.1, math.cos(math.radians(lat0)))
+    # spacing between centers so circles don’t overlap much
+    spacing_mi = range_mi * 1.6
+    dlat = spacing_mi / miles_per_deg_lat
+    dlon = spacing_mi / miles_per_deg_lon
+
+    # arrange in square grid centered at (lat0, lon0)
+    k = math.ceil(math.sqrt(max(1, num_sites)))
+    # center grid indices around zero
+    idxs = [(i - (k-1)/2, j - (k-1)/2) for i in range(k) for j in range(k)]
+    idxs = idxs[:num_sites]
+
+    for (gi, gj) in idxs:
+        lat = lat0 + gi * dlat
+        lon = lon0 + gj * dlon
+        folium.Circle(
+            location=(lat, lon),
+            radius=range_mi * 1609.34,
+            color="red",
+            fill=False,
+            weight=3,
+            opacity=0.8,
+        ).add_to(m)
+        folium.CircleMarker(
+            location=(lat, lon),
+            radius=3,
+            color="red",
+            fill=True
+        ).add_to(m)
+
+    st_folium(m, width=800, height=500, key=key)
 
 # ---------------- Panel renderer --------------------------------------------
 def panel(title, product_names_list, is_left=True, competitor=None):
     with st.container(border=True):
         st.subheader(title)
 
-        # Map placeholder (reuse DFR heat + range circle)
-        render_map(
-            all_dfr,
-            heat=True,
-            heat_radius=8, heat_blur=12,
-            title="",
-            key=f"cmp_map_{'L' if is_left else 'R'}_{title}",
-            show_circle=True,
-            launch_coords=launch_coords
-        )
+        # Map
+        if is_left:
+            render_map(
+                all_dfr,
+                heat=True,
+                heat_radius=8, heat_blur=12,
+                title="",
+                key=f"cmp_map_{'L'}_{title}",
+                show_circle=True,
+                launch_coords=launch_coords
+            )
+        else:
+            plan = competitor_plan(competitor, TARGET_AREA_SQMI)
+            render_competitor_map(
+                num_sites=plan["locations"],
+                range_mi=plan["range_mi"],
+                key=f"cmp_map_R_{title}"
+            )
 
         # Headline stats row
         c1, c2, c3 = st.columns(3)
@@ -2118,11 +2161,11 @@ def panel(title, product_names_list, is_left=True, competitor=None):
             comp_docks_per_loc = PLATFORMS[competitor]["docks_per_location"]
             required_locs = plan["locations"]
             total_comp_docks = required_locs * comp_docks_per_loc
-        
+
             c1.metric("Required Locations", f"{required_locs:,}")
             c2.metric("Total Docks", f"{total_comp_docks:,}")
             c3.metric("Yearly Cost", f"${plan['yearly_cost']:,}")
-        
+
             st.caption(
                 f"Docks per location: {comp_docks_per_loc} • "
                 f"Per-location area: {plan['per_location_area_sqmi']:.2f} sq mi • "
@@ -2166,10 +2209,11 @@ with L:
     panel(aerodome_title, detected_types_list if is_multi else detected_types_list[:1], is_left=True)
 
 with R:
+    comp_choice = st.selectbox("Compare against", COMPETITOR_OPTIONS, index=0, key="cmp_choice")
     panel(comp_choice, [], is_left=False, competitor=comp_choice)
 
 st.caption(
-    "Note: Competitor maps are placeholders for now. "
-    "Estimated locations and yearly cost are computed from target area, each platform’s effective range, "
-    "docks per location, and price per dock. Target area uses the smaller of (city area, our estimated coverage)."
+    "Note: Competitor circles are placeholder placements to visualize count & radius. "
+    "Estimated locations and yearly cost are computed from target area (smaller of city area or our estimated coverage), "
+    "each platform’s effective range, docks per location, and price per dock."
 )
