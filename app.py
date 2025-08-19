@@ -1787,32 +1787,53 @@ def _unproject_points(inv: Transformer, xs, ys):
 # ---------- City limits from call data (concave hull in meters) ----------
 def calls_concave_hull_utm(lat, lon, eps_m=1500, min_samples=20,
                            alpha=None, buffer_smooth_m=300, simplify_m=100):
+    """
+    Return (polygon_UTM, area_sqmi, (fwd, inv)) from call points in local UTM.
+    Makes sure DBSCAN sees only finite XY.
+    """
     lat = pd.to_numeric(pd.Series(lat), errors="coerce")
     lon = pd.to_numeric(pd.Series(lon), errors="coerce")
-    mask = lat.notna() & lon.notna()
+
+    # 1) keep only finite lon/lat
+    mask = lat.notna() & lon.notna() & np.isfinite(lat) & np.isfinite(lon)
     if mask.sum() < 10:
         return None, 0.0, (None, None)
 
+    # 2) project to meters (UTM) and re-filter to finite XY
     fwd, inv = _make_transformers(lat[mask].values, lon[mask].values)
     X, Y = _project_points(fwd, lat[mask].values, lon[mask].values)
+    XY = np.c_[X, Y]
+    finite_xy = np.isfinite(XY).all(axis=1)
+    XY = XY[finite_xy]
 
-    labels = DBSCAN(eps=eps_m, min_samples=min_samples).fit_predict(np.c_[X, Y])
-    if (labels >= 0).sum() > 0:
-        labs, cnts = np.unique(labels[labels >= 0], return_counts=True)
-        keep_lab = labs[np.argmax(cnts)]
-        sel = labels == keep_lab
-        X, Y = X[sel], Y[sel]
-
-    if len(X) < 3:
+    if len(XY) < 10:  # need enough points for clustering/hull
         return None, 0.0, (fwd, inv)
 
-    XY = np.c_[X, Y]
+    # 3) outlier removal with DBSCAN (guard against failures)
+    try:
+        labels = DBSCAN(eps=float(eps_m), min_samples=int(min_samples)).fit_predict(XY)
+        # keep largest non-negative cluster; if none, keep all
+        if (labels >= 0).sum() > 0:
+            labs, cnts = np.unique(labels[labels >= 0], return_counts=True)
+            keep_lab = labs[np.argmax(cnts)]
+            XY = XY[labels == keep_lab]
+    except Exception:
+        # if DBSCAN fails for any reason, keep all points
+        pass
+
+    if len(XY) < 3:
+        return None, 0.0, (fwd, inv)
+
+    # 4) choose alpha if not provided (median 1-NN distance)
     if alpha is None:
-        nbrs = NearestNeighbors(n_neighbors=2).fit(XY)
-        dists, _ = nbrs.kneighbors(XY)
-        med = float(np.median(dists[:, 1])) if np.isfinite(np.median(dists[:, 1])) and np.median(dists[:, 1]) > 0 else 1.0
+        from sklearn.neighbors import NearestNeighbors
+        nbrs = NearestNeighbors(n_neighbors=2, algorithm="auto").fit(XY)
+        dists, _ = nbrs.kneighbors(XY, return_distance=True)
+        dmin = dists[:, 1]  # first neighbor (0 is self)
+        med = float(np.median(dmin)) if np.isfinite(dmin).all() and np.median(dmin) > 0 else 1.0
         alpha = 1.0 / med
 
+    # 5) alpha shape → largest polygon → smooth/simplify
     pts = [Point(float(x), float(y)) for x, y in XY]
     poly = alphashape.alphashape(pts, alpha)
     if not poly or poly.is_empty:
