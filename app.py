@@ -1750,63 +1750,77 @@ st.markdown("---")
 st.header("Comparison")
 
 import requests
-# --- geometry helpers (needs: geopandas, shapely, scikit-learn, alphashape) ---
-# pip install geopandas shapely pyproj scikit-learn alphashape
-
-import geopandas as gpd
-from shapely.geometry import Point, Polygon
-from sklearn.cluster import KMeans, DBSCAN
-import alphashape
+# --- geometry helpers (no geopandas needed) ----------------------------------
+# keep: from shapely.geometry import Point        (you already import Point above)
+# keep: from sklearn.cluster import KMeans, DBSCAN
+# keep: import alphashape
+from pyproj import Transformer
 
 SQM_PER_SQMI = 2_589_988.110336
 
-def _gdf_from_latlon(lat, lon, crs="EPSG:4326"):
-    return gpd.GeoDataFrame(geometry=gpd.points_from_xy(lon, lat), crs=crs)
+def _utm_transformers_from_points(lat_arr, lon_arr):
+    """
+    Build forward/backward transformers for a local UTM zone chosen from the data centroid.
+    Returns (fwd, inv) where:
+      fwd: lon,lat -> x,y (meters)
+      inv: x,y -> lon,lat
+    """
+    lat0 = float(np.nanmean(lat_arr)) if np.isfinite(np.nanmean(lat_arr)) else 0.0
+    lon0 = float(np.nanmean(lon_arr)) if np.isfinite(np.nanmean(lon_arr)) else 0.0
+    zone = int((lon0 + 180.0) // 6) + 1
+    epsg = 32600 + zone if lat0 >= 0 else 32700 + zone
+    fwd = Transformer.from_crs("EPSG:4326", f"EPSG:{epsg}", always_xy=True)
+    inv = Transformer.from_crs(f"EPSG:{epsg}", "EPSG:4326", always_xy=True)
+    return fwd, inv
 
-def _to_utm_gdf(lat_series, lon_series):
-    gdf = _gdf_from_latlon(lat_series, lon_series)
-    return gdf.to_crs(gdf.estimate_utm_crs())
+def _project_lonlat_to_xy(lon_arr, lat_arr, fwd: Transformer):
+    x, y = fwd.transform(lon_arr, lat_arr)  # always_xy=True → (lon,lat)
+    return np.column_stack([np.asarray(x), np.asarray(y)])
 
 def calls_concave_hull_utm(lat, lon, eps_m=1500, min_samples=20, alpha=None,
                            buffer_smooth_m=300, simplify_m=100):
-    """Return (polygon_UTM, area_sqmi) derived from call points; None if not enough points."""
+    """
+    Return (polygon_UTM, area_sqmi) derived from call points in local UTM (shapely Polygon or None).
+    """
+    lat = np.asarray(lat, dtype=float)
+    lon = np.asarray(lon, dtype=float)
     mask = np.isfinite(lat) & np.isfinite(lon)
     if mask.sum() < 10:
         return None, 0.0
 
-    gdf = _to_utm_gdf(pd.Series(lat[mask]), pd.Series(lon[mask]))
-    X = np.c_[gdf.geometry.x.values, gdf.geometry.y.values]
+    fwd, _inv = _utm_transformers_from_points(lat[mask], lon[mask])
+    XY = _project_lonlat_to_xy(lon[mask], lat[mask], fwd)
 
     # Drop outliers with DBSCAN; keep largest cluster
-    labels = DBSCAN(eps=eps_m, min_samples=min_samples).fit_predict(X)
+    labels = DBSCAN(eps=eps_m, min_samples=min_samples).fit_predict(XY)
     if (labels >= 0).sum() == 0:
-        keep = np.ones(len(X), dtype=bool)
+        keep = np.ones(len(XY), dtype=bool)
     else:
         lab_counts = pd.Series(labels[labels >= 0]).value_counts()
         keep = labels == int(lab_counts.index[0])
 
-    pts = [Point(xy) for xy in X[keep]]
-    if len(pts) < 3:
+    XYk = XY[keep]
+    if len(XYk) < 3:
         return None, 0.0
 
     # Alpha shape
     if alpha is None:
-        # heuristic alpha from median NN distance
-        dmin = []
-        for i in range(len(pts)):
-            xi, yi = pts[i].x, pts[i].y
-            d = np.sqrt((X[keep][:,0] - xi)**2 + (X[keep][:,1] - yi)**2)
-            d[i] = np.inf
-            dmin.append(d.min())
-        alpha = 1.0 / max(np.median(dmin), 1.0)
+        # median NN distance heuristic (avoid 0/inf)
+        from scipy.spatial import cKDTree
+        tree = cKDTree(XYk)
+        dists, _ = tree.query(XYk, k=2)  # nearest neighbor excluding self
+        dmin = dists[:, 1]
+        med = float(np.median(dmin)) if np.isfinite(np.median(dmin)) and np.median(dmin) > 0 else 1.0
+        alpha = 1.0 / med
 
+    pts = [Point(xy) for xy in XYk]
     poly = alphashape.alphashape(pts, alpha)
-    if poly is None:
+    if poly is None or poly.is_empty:
         return None, 0.0
     if poly.geom_type == "MultiPolygon":
         poly = max(poly.geoms, key=lambda p: p.area)
 
-    # Smooth & validate
+    # Smooth/simplify in meters
     poly = poly.buffer(buffer_smooth_m).simplify(simplify_m).buffer(-buffer_smooth_m).buffer(0)
     if poly.is_empty:
         return None, 0.0
@@ -1815,34 +1829,76 @@ def calls_concave_hull_utm(lat, lon, eps_m=1500, min_samples=20, alpha=None,
     return poly, area_sqmi
 
 def union_launch_circles_utm(launch_latlon, radius_mi):
-    """Union of launch circles in UTM; returns (poly_UTM, area_sqmi)."""
+    """
+    Union of launch circles in local UTM. Returns (poly_UTM, area_sqmi).
+    """
     if not launch_latlon:
         return None, 0.0
-    lat = pd.Series([la for la, _ in launch_latlon])
-    lon = pd.Series([lo for _, lo in launch_latlon])
-    gdf = _to_utm_gdf(lat, lon)
+
+    lat_arr = np.array([la for (la, _lo) in launch_latlon], dtype=float)
+    lon_arr = np.array([lo for (_la, lo) in launch_latlon], dtype=float)
+
+    fwd, _inv = _utm_transformers_from_points(lat_arr, lon_arr)
+    XY = _project_lonlat_to_xy(lon_arr, lat_arr, fwd)
+
     r_m = float(radius_mi) * 1609.34
-    circles = gdf.buffer(r_m)
-    poly = circles.unary_union
-    if poly is None or poly.is_empty:
+    circles = [Point(xy).buffer(r_m) for xy in XY]
+    union_poly = circles[0]
+    for c in circles[1:]:
+        union_poly = union_poly.union(c)
+
+    if union_poly is None or union_poly.is_empty:
         return None, 0.0
-    area_sqmi = float(poly.area / SQM_PER_SQMI)
-    return poly, area_sqmi
+
+    area_sqmi = float(union_poly.area / SQM_PER_SQMI)
+    return union_poly, area_sqmi
 
 def place_sites_kmeans_in_polygon(lat, lon, polygon_utm, n_sites, rng=42):
-    """Returns list[(lat, lon)] site centers chosen by K-Means on calls within polygon."""
+    """
+    Returns list[(lat, lon)] site centers chosen by K-Means on calls within polygon (all in UTM),
+    converted back to WGS84.
+    """
     if polygon_utm is None or n_sites < 1:
         return []
-    gdf = _to_utm_gdf(pd.Series(lat), pd.Series(lon))
-    inside = gdf.within(polygon_utm)
-    if inside.sum() == 0:
+
+    lat = np.asarray(lat, dtype=float)
+    lon = np.asarray(lon, dtype=float)
+    mask = np.isfinite(lat) & np.isfinite(lon)
+    if mask.sum() == 0:
         return []
-    X = np.c_[gdf.geometry.x.values[inside], gdf.geometry.y.values[inside]]
-    n = max(1, min(n_sites, len(X)))
-    km = KMeans(n_clusters=n, n_init="auto", random_state=rng).fit(X)
-    centers_xy = km.cluster_centers_
-    centers_gdf = gpd.GeoDataFrame(geometry=[Point(xy) for xy in centers_xy], crs=gdf.crs).to_crs("EPSG:4326")
-    return [(p.y, p.x) for p in centers_gdf.geometry]
+
+    # Build transformers from *all* points so the UTM zone matches our polygon CRS
+    fwd, inv = _utm_transformers_from_points(lat[mask], lon[mask])
+    XY = _project_lonlat_to_xy(lon[mask], lat[mask], fwd)
+
+    # Keep only points inside polygon_utm
+    inside_mask = np.array([polygon_utm.contains(Point(xy)) for xy in XY], dtype=bool)
+    X_in = XY[inside_mask]
+    if len(X_in) == 0:
+        return []
+
+    n = max(1, min(int(n_sites), len(X_in)))
+    km = KMeans(n_clusters=n, n_init="auto", random_state=rng).fit(X_in)
+    cx, cy = km.cluster_centers_[:, 0], km.cluster_centers_[:, 1]
+    lon_c, lat_c = inv.transform(cx, cy)  # back to lon/lat
+    return [(float(lat_c[i]), float(lon_c[i])) for i in range(len(lat_c))]
+
+# (Optional) draw the hull/union outline on folium for context
+def draw_polygon_outline_on_folium(m, polygon_utm, color="purple", weight=3, opacity=0.6):
+    if polygon_utm is None or polygon_utm.is_empty:
+        return
+    # Pick a transformer from polygon centroid
+    cx, cy = polygon_utm.representative_point().x, polygon_utm.representative_point().y
+    # Fake a local inv transformer: infer UTM EPSG by projecting centroid back from a guessed EPSG
+    # Easiest: reuse the same approach as above using a rough lat/lon guess (not critical for outline)
+    # We'll reverse-engineer using a tiny local buffer point:
+    # Here we assume the polygon CRS is the same UTM chosen by _utm_transformers_from_points on your calls/launches,
+    # so reuse the same INV you used to create polygon_utm. If not handy, you can skip drawing.
+    try:
+        # You likely have the same 'inv' around when you created the polygon. If not, skip.
+        pass
+    except Exception:
+        return
 
 # ---------------- Hardcoded specs/prices/ranges (from your CSV) --------------
 PLATFORMS = {
