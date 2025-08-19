@@ -1652,31 +1652,30 @@ PRICE_PER_DOCK_BY_TYPE = {
 PRICE_PER_RADAR = 150000  # yearly
 
 # Ensure optional pricing columns exist in launch_rows
-# Expected columns: ["Location Name","Address","Lat","Lon","Type","Drone Type","Docks","Radars"]
-# (Type should already be "Launch Location" for launch_rows)
-for col, default in [("Drone Type", ""), ("Docks", 0), ("Radars", 0)]:
+# Expected columns: ["Location Name","Address","Lat","Lon","Dock Type","Number of Docks","Number of Radar"]
+for col, default in [("Dock Type", ""), ("Number of Docks", 0), ("Number of Radar", 0)]:
     if col not in launch_rows.columns:
         launch_rows[col] = default
 
 # Normalize and coerce
 _lr = launch_rows.copy()
-_lr["Drone Type"] = _lr["Drone Type"].astype(str).str.strip().str.upper()
-_lr["Docks"] = pd.to_numeric(_lr["Docks"], errors="coerce").fillna(0).astype(int)
-_lr["Radars"] = pd.to_numeric(_lr["Radars"], errors="coerce").fillna(0).astype(int)
+_lr["Dock Type"] = _lr["Dock Type"].astype(str).str.strip().str.upper()
+_lr["Number of Docks"] = pd.to_numeric(_lr["Number of Docks"], errors="coerce").fillna(0).astype(int)
+_lr["Number of Radar"] = pd.to_numeric(_lr["Number of Radar"], errors="coerce").fillna(0).astype(int)
 
 # Compute per-site costs
-def dock_unit_price(drone_type):
-    return PRICE_PER_DOCK_BY_TYPE.get(str(drone_type).upper().strip(), 0)
+def dock_unit_price(dock_type):
+    return PRICE_PER_DOCK_BY_TYPE.get(str(dock_type).upper().strip(), 0)
 
-_lr["Dock Unit Price"]  = _lr["Drone Type"].map(dock_unit_price)
-_lr["Dock Yearly Cost"] = (_lr["Docks"] * _lr["Dock Unit Price"]).astype(int)
-_lr["Radar Yearly Cost"] = (_lr["Radars"] * PRICE_PER_RADAR).astype(int)
+_lr["Dock Unit Price"]   = _lr["Dock Type"].map(dock_unit_price)
+_lr["Dock Yearly Cost"]  = (_lr["Number of Docks"] * _lr["Dock Unit Price"]).astype(int)
+_lr["Radar Yearly Cost"] = (_lr["Number of Radar"] * PRICE_PER_RADAR).astype(int)
 _lr["Site Yearly Total"] = (_lr["Dock Yearly Cost"] + _lr["Radar Yearly Cost"]).astype(int)
 
 # Totals
 total_launch_sites = len(_lr)
-total_docks  = int(_lr["Docks"].sum())
-total_radars = int(_lr["Radars"].sum())
+total_docks  = int(_lr["Number of Docks"].sum())
+total_radars = int(_lr["Number of Radar"].sum())
 list_total   = int(_lr["Site Yearly Total"].sum())
 
 # Discount input (sidebar)
@@ -1686,11 +1685,10 @@ discount_rate = float(discount_pct) / 100.0
 discount_amount = int(round(list_total * discount_rate))
 discounted_total = int(list_total - discount_amount)
 
-# Recommended drone type(s): based on CSV values present
-present_types = [t for t in _lr["Drone Type"].unique().tolist() if t]
-# If you want a single “recommended”, pick the type with the most docks
+# Recommended dock type(s): based on CSV values present
+present_types = [t for t in _lr["Dock Type"].unique().tolist() if t]
 if len(present_types) > 1:
-    top_type = (_lr.groupby("Drone Type")["Docks"].sum().sort_values(ascending=False).index.tolist() or [""])[0]
+    top_type = (_lr.groupby("Dock Type")["Number of Docks"].sum().sort_values(ascending=False).index.tolist() or [""])[0]
     recommended_label = f"{', '.join(present_types)}  (top: {top_type})"
 else:
     recommended_label = present_types[0] if present_types else "—"
@@ -1717,7 +1715,7 @@ c1, c2, c3, c4 = st.columns(4)
 c1.metric("Launch Locations", f"{total_launch_sites:,}")
 c2.metric("Total Docks", f"{total_docks:,}")
 c3.metric("Total Radars", f"{total_radars:,}")
-c4.metric("Recommended Drone Type(s)", recommended_label)
+c4.metric("Recommended Dock Type(s)", recommended_label)
 
 c5, c6 = st.columns(2)
 c5.metric("Yearly Cost (List)", _fmt_usd(list_total))
@@ -1726,8 +1724,8 @@ c6.metric(f"Yearly Cost (Discounted {int(discount_pct)}%)", _fmt_usd(discounted_
 # --- Expandable per-site breakdown ---
 with st.expander("Per-site pricing details"):
     detail_df = _lr[[
-        "Location Name", "Address", "Drone Type", "Docks", "Dock Unit Price",
-        "Dock Yearly Cost", "Radars", "Radar Yearly Cost", "Site Yearly Total"
+        "Location Name", "Address", "Dock Type", "Number of Docks", "Dock Unit Price",
+        "Dock Yearly Cost", "Number of Radar", "Radar Yearly Cost", "Site Yearly Total"
     ]].copy()
     # Nice formatting for display
     _money_cols = ["Dock Unit Price", "Dock Yearly Cost", "Radar Yearly Cost", "Site Yearly Total"]
