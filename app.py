@@ -1157,20 +1157,20 @@ try:
         "total_time_on_clearable_sec": float(clr_count * avg_clr) if (np.isfinite(avg_clr)) else None,
     }
 
-   # Config/context so we can reproduce the run later
-config_dict = {
-    "agency_name": AGENCY_NAME or "unknown_agency",
-    "analyst_name": st.session_state.get("analyst_name", ""),
-    "notes": st.session_state.get("run_notes", ""),
-    "run_time_iso": datetime.now().isoformat(),
-    "assumptions": {
-        "fte_hours": int(fte_hours),
-        "officer_cost_usd": int(officer_cost),
-        "cancel_rate": float(cancel_rate),
-        "drone_speed_mph": float(drone_speed),
-        "drone_range_miles": float(drone_range),
-    },
-}
+       # Config/context so we can reproduce the run later
+    config_dict = {
+        "agency_name": AGENCY_NAME or "unknown_agency",
+        "analyst_name": st.session_state.get("analyst_name", ""),
+        "notes": st.session_state.get("run_notes", ""),
+        "run_time_iso": datetime.now().isoformat(),
+        "assumptions": {
+            "fte_hours": int(fte_hours),
+            "officer_cost_usd": int(officer_cost),
+            "cancel_rate": float(cancel_rate),
+            "drone_speed_mph": float(drone_speed),
+            "drone_range_miles": float(drone_range),
+        },
+    }
         "launch_sites_count": len(launch_coords) if 'launch_coords' in locals() else 0,
         "hotspot": {
             "address": hotspot_address if 'hotspot_address' in locals() else None,
