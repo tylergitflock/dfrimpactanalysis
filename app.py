@@ -397,21 +397,19 @@ st.sidebar.header("2) Agency Name")
 # We stored the guess during ZIP parsing:
 zip_agency = st.session_state.get("agency_name_guess", "")
 
-# Keep a single source of truth in session_state; manual entry defaults to ZIP guess
-st.session_state["manual_agency_name"] = st.sidebar.text_input(
+# Bind the widget to session state (do NOT assign the return value yourself)
+st.sidebar.text_input(
     "Enter Agency Name",
     value=st.session_state.get("manual_agency_name", zip_agency),
     key="manual_agency_name"
 )
 
-AGENCY_NAME = st.session_state["manual_agency_name"].strip()
+AGENCY_NAME = st.session_state.get("manual_agency_name", "").strip()
 
 # Render heading: agency above the analysis title
 if AGENCY_NAME:
     st.markdown(f"# {AGENCY_NAME}")
     st.markdown("## DFR Impact Analysis")
-else:
-    st.title("DFR Impact Analysis")
 
 # ─── 1) SIDEBAR: UPLOADS & EDITORS ───────────────────────────────────────────
 
@@ -656,16 +654,18 @@ progress.progress(70)
 
 # ─── Agency details (saved with each run) ────────────────────────────────────
 with st.sidebar.expander("Agency details", expanded=True):
-    agency_name = st.text_input(
+    agency_name_input = st.text_input(
         "Agency name",
         value=st.session_state.get("manual_agency_name", ""),
-        placeholder="e.g., Fort Worth PD"
+        placeholder="e.g., Fort Worth PD",
+        key="agency_name_details"  # avoid key clash with the step-1 input
     )
-    analyst_name = st.text_input("Analyst (optional)", value="")
-    run_notes = st.text_area("Run notes (optional)", height=80)
+    analyst_name = st.text_input("Analyst (optional)", value="", key="analyst_name")
+    run_notes = st.text_area("Run notes (optional)", height=80, key="run_notes")
 
-# Default back to manual agency name if left blank
-agency_name = agency_name or st.session_state.get("manual_agency_name", "")
+# Resolve and keep everything in sync
+agency_name = (agency_name_input or st.session_state.get("manual_agency_name", "")).strip()
+st.session_state["manual_agency_name"] = agency_name  # single source of truth
 
 st.sidebar.header("5) ALPR & Audio (optional)")
 
