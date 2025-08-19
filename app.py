@@ -1754,7 +1754,7 @@ import numpy as np
 import pandas as pd
 import folium
 from streamlit_folium import st_folium
-from shapely.geometry import Point
+from shapely.geometry import Point, MultiPoint
 from sklearn.cluster import KMeans, DBSCAN
 from sklearn.neighbors import NearestNeighbors
 from pyproj import Transformer
@@ -1789,7 +1789,7 @@ def calls_concave_hull_utm(lat, lon, eps_m=1500, min_samples=20,
                            alpha=None, buffer_smooth_m=300, simplify_m=100):
     """
     Return (polygon_UTM, area_sqmi, (fwd, inv)) from call points in local UTM.
-    Makes sure DBSCAN sees only finite XY.
+    Robust to NaNs, duplicates, collinear points, and alphashape failures.
     """
     lat = pd.to_numeric(pd.Series(lat), errors="coerce")
     lon = pd.to_numeric(pd.Series(lon), errors="coerce")
@@ -1803,44 +1803,58 @@ def calls_concave_hull_utm(lat, lon, eps_m=1500, min_samples=20,
     fwd, inv = _make_transformers(lat[mask].values, lon[mask].values)
     X, Y = _project_points(fwd, lat[mask].values, lon[mask].values)
     XY = np.c_[X, Y]
-    finite_xy = np.isfinite(XY).all(axis=1)
-    XY = XY[finite_xy]
+    XY = XY[np.isfinite(XY).all(axis=1)]
 
-    if len(XY) < 10:  # need enough points for clustering/hull
+    # 3) dedupe exact duplicates; need enough left
+    if len(XY) == 0:
+        return None, 0.0, (fwd, inv)
+    XY = np.unique(XY, axis=0)
+    if len(XY) < 3:
         return None, 0.0, (fwd, inv)
 
-    # 3) outlier removal with DBSCAN (guard against failures)
+    # 4) outlier removal with DBSCAN (guard against failures)
     try:
         labels = DBSCAN(eps=float(eps_m), min_samples=int(min_samples)).fit_predict(XY)
-        # keep largest non-negative cluster; if none, keep all
         if (labels >= 0).sum() > 0:
             labs, cnts = np.unique(labels[labels >= 0], return_counts=True)
             keep_lab = labs[np.argmax(cnts)]
             XY = XY[labels == keep_lab]
     except Exception:
-        # if DBSCAN fails for any reason, keep all points
         pass
 
     if len(XY) < 3:
         return None, 0.0, (fwd, inv)
 
-    # 4) choose alpha if not provided (median 1-NN distance)
+    # 5) choose alpha if not provided (median 1-NN distance)
     if alpha is None:
         from sklearn.neighbors import NearestNeighbors
         nbrs = NearestNeighbors(n_neighbors=2, algorithm="auto").fit(XY)
         dists, _ = nbrs.kneighbors(XY, return_distance=True)
-        dmin = dists[:, 1]  # first neighbor (0 is self)
+        dmin = dists[:, 1]
         med = float(np.median(dmin)) if np.isfinite(dmin).all() and np.median(dmin) > 0 else 1.0
         alpha = 1.0 / med
 
-    # 5) alpha shape → largest polygon → smooth/simplify
+    # 6) alpha shape with safe fallback to convex hull
     pts = [Point(float(x), float(y)) for x, y in XY]
-    poly = alphashape.alphashape(pts, alpha)
+    poly = None
+    try:
+        poly = alphashape.alphashape(pts, alpha)
+    except Exception:
+        poly = None
+
     if not poly or poly.is_empty:
+        poly = MultiPoint(pts).convex_hull  # fallback (can be Polygon or LineString)
+
+    # If hull collapses to a line/zero-area, thicken slightly (1 m) so it’s plottable
+    if poly.is_empty:
         return None, 0.0, (fwd, inv)
+    if getattr(poly, "geom_type", "") == "LineString" or float(poly.area) == 0.0:
+        poly = poly.buffer(1.0)  # meters
+
     if poly.geom_type == "MultiPolygon":
         poly = max(poly.geoms, key=lambda p: p.area)
 
+    # 7) Smooth/simplify in meters
     poly = poly.buffer(buffer_smooth_m).simplify(simplify_m).buffer(-buffer_smooth_m).buffer(0)
     if poly.is_empty:
         return None, 0.0, (fwd, inv)
