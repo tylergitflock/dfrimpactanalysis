@@ -1845,6 +1845,21 @@ SPECS = {
 def _series_or_empty(s):
     return s if s is not None else pd.Series(dtype=object)
 
+# Ensure we have the Dock Type column
+if "Dock Type" in launch_df.columns:
+    dock_type_col = launch_df["Dock Type"]
+else:
+    dock_type_col = pd.Series(dtype=object)  # empty fallback
+
+dock_vals_raw = _series_or_empty(dock_type_col).astype(str).str.strip()
+dock_vals_norm = (
+    dock_vals_raw
+    .replace("", "Dock 3")                                   # default if blank
+    .str.replace("Flock Aerodome ", "", regex=False)         # strip prefix
+    .str.title()
+)
+detected_types = sorted([t for t in dock_vals_norm.dropna().unique().tolist() if t])
+
 dock_vals_raw = _series_or_empty(dock_type_col).astype(str).str.strip()
 dock_vals_norm = (
     dock_vals_raw
