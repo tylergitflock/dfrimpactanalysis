@@ -16,6 +16,9 @@ from folium.plugins import HeatMap
 import math
 import zipfile, re
 
+# ─── Page Setup (must be first Streamlit call) ───────────────────────────────
+st.set_page_config(page_title="DFR Impact Analysis", layout="wide")
+
 # Optional: tz for local timestamps (comment out if unavailable)
 try:
     from tzlocal import get_localzone
@@ -180,7 +183,6 @@ if st.session_state.get("viewing_saved") and st.session_state.get("loaded_run_di
     st.stop()  # IMPORTANT: don’t run the rest of the app
 
 # ─── Page Setup ───────────────────────────────────────────────────────────────
-st.set_page_config(page_title="DFR Impact Analysis", layout="wide")
 # Show a banner when replaying a saved run
 if st.session_state.get("replay_dir"):
     st.info(f"Replaying saved run from: {st.session_state['replay_dir']}")
@@ -345,7 +347,7 @@ if mode == "Open past report":
         st.success("Replaying this run with the saved CSVs and current code…")
         st.rerun()
 
-st.sidebar.write("DEBUG state:", dict(st.session_state))
+# st.sidebar.write("DEBUG state:", dict(st.session_state))
 
 
 # ─── 0) PROGRESS BAR ──────────────────────────────────────────────────────────
@@ -1398,11 +1400,83 @@ if hotspot_coords:
 else:
     hotspot_calls = pd.DataFrame()
 
+def render_map(
+    df_pts,
+    heat=False,
+    title="",
+    key=None,
+    heat_radius=15,
+    heat_blur=25,
+    show_circle=False,
+    launch_coords=None,
+    hotspot_center=None,
+    hotspot_radius=None,
+):
+    st.subheader(title)
+
+    # drop any NaNs so folium never errors
+    if {"lat","lon"}.issubset(df_pts.columns):
+        df_pts = df_pts.dropna(subset=["lat","lon"])
+
+    # determine map center
+    if show_circle and launch_coords:
+        center = [float(launch_coords[0][0]), float(launch_coords[0][1])]
+    elif not df_pts.empty:
+        center = [float(df_pts["lat"].mean()), float(df_pts["lon"].mean())]
+    else:
+        center = [0.0, 0.0]
+
+    m = folium.Map(location=center, zoom_start=10)
+
+    # blue 3.5 mi drone-range circle
+    if show_circle and launch_coords:
+        for la, lo in launch_coords:
+            folium.Circle(
+                location=(la, lo),
+                radius=drone_range * 1609.34,
+                color="blue",
+                fill=False
+            ).add_to(m)
+
+    # red 0.5 mi hotspot circle
+    if hotspot_center and hotspot_radius:
+        folium.Circle(
+            location=hotspot_center,
+            radius=hotspot_radius * 1609.34,
+            color="red",
+            weight=3,
+            fill=False
+        ).add_to(m)
+
+    # heat or points
+    if heat and not df_pts.empty:
+        # if you've passed in a 'count' column, use it as intensity
+        if "count" in df_pts.columns:
+            data = df_pts[["lat", "lon", "count"]].values.tolist()
+        else:
+            data = df_pts[["lat", "lon"]].values.tolist()
+
+        HeatMap(
+            data,
+            radius=heat_radius,
+            blur=heat_blur
+        ).add_to(m)
+    else:
+        for _, r in df_pts.iterrows():
+            folium.CircleMarker(
+                location=(r["lat"], r["lon"]),
+                radius=3,
+                color="red",
+                fill=True,
+                fill_opacity=0.6
+            ).add_to(m)
+
+    st_folium(m, width=800, height=500, key=key)
+
 # 6a) Heatmap: All DFR Calls
 r0, b0 = auto_heat_params(all_dfr)
 r_all = st.sidebar.slider("All DFR Calls Heat Radius", 1, 50, value=r0, key="all_r")
 b_all = st.sidebar.slider("All DFR Calls Heat Blur",   1, 50, value=b0, key="all_b")
-st.subheader("Heatmap: All DFR Calls")
 render_map(
     all_dfr,
     heat=True,
@@ -1425,7 +1499,6 @@ metrics_under(
 st.markdown("---")
 
 # 6b) 3.5-mile Drone Range (circle only)
-st.subheader("3.5-mile Drone Range")
 render_map(
     pd.DataFrame(),
     heat=False,
@@ -1448,7 +1521,6 @@ st.markdown("---")
 # 6c) Heatmap: P1 DFR Calls
 r_p1 = st.sidebar.slider("P1 DFR Heat Radius", 1, 50, value=9, key="p1_r")
 b_p1 = st.sidebar.slider("P1 DFR Heat Blur",   1, 50, value=9, key="p1_b")
-st.subheader("Heatmap: Priority-1 DFR Calls")
 render_map(
     all_p1,
     heat=True,
@@ -1473,7 +1545,6 @@ if hotspot_coords:
     r_hs = st.sidebar.slider("Hotspot Heat Radius", 1, 50, value=r_hs, key="hs_r")
     b_hs = st.sidebar.slider("Hotspot Heat Blur",   1, 50, value=b_hs, key="hs_b")
 
-    st.subheader("Heatmap: All DFR Calls + Hotspot")
     render_map(
         all_dfr,
         heat=True,
@@ -1497,7 +1568,6 @@ if hotspot_coords:
 r2, b2 = auto_heat_params(all_clearable)
 r_cl = st.sidebar.slider("Clearable Heat Radius", 1, 50, value=r2, key="clr_r")
 b_cl = st.sidebar.slider("Clearable Heat Blur",   1, 50, value=b2, key="clr_b")
-st.subheader("Heatmap: Clearable DFR Calls")
 render_map(
     all_clearable,
     heat=True,
@@ -1520,7 +1590,6 @@ st.markdown("---")
 
 # 6f) Heatmap: ALPR Locations
 if alpr_df is not None:
-    st.subheader("Heatmap: ALPR Locations")
     alpr_pts = pd.DataFrame({
         "lat": pd.to_numeric(alpr_df.iloc[:, 4], errors="coerce"),
         "lon": pd.to_numeric(alpr_df.iloc[:, 5], errors="coerce")
@@ -1548,7 +1617,6 @@ if alpr_df is not None:
 
 # 6g) Heatmap: Audio Locations
 if audio_pts is not None and not audio_pts.empty:
-    st.subheader("Heatmap: Audio Locations")
     r_au = st.sidebar.slider("Audio Heat Radius", 1, 50, value=4, key="audio_r")
     b_au = st.sidebar.slider("Audio Heat Blur",   1, 50, value=4, key="audio_b")
 
