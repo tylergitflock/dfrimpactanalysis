@@ -1803,12 +1803,13 @@ def calls_concave_hull_utm(lat, lon, eps_m=1500, min_samples=20, alpha=None,
     if len(XYk) < 3:
         return None, 0.0
 
-    # Alpha shape
+        # Alpha shape
     if alpha is None:
-        # median NN distance heuristic (avoid 0/inf)
-        from scipy.spatial import cKDTree
-        tree = cKDTree(XYk)
-        dists, _ = tree.query(XYk, k=2)  # nearest neighbor excluding self
+        # median nearest-neighbor distance using scikit-learn (no SciPy needed)
+        from sklearn.neighbors import NearestNeighbors
+        nbrs = NearestNeighbors(n_neighbors=2, algorithm="auto").fit(XYk)
+        dists, _ = nbrs.kneighbors(XYk, return_distance=True)
+        # dists[:, 0] is 0 (self); use the 1st neighbor
         dmin = dists[:, 1]
         med = float(np.median(dmin)) if np.isfinite(np.median(dmin)) and np.median(dmin) > 0 else 1.0
         alpha = 1.0 / med
