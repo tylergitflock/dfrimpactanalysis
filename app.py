@@ -15,7 +15,6 @@ import folium
 from folium.plugins import HeatMap
 import math
 import zipfile, re
-import geopandas
 
 # ─── Page Setup (must be first Streamlit call) ───────────────────────────────
 st.set_page_config(page_title="DFR Impact Analysis", layout="wide")
@@ -1850,6 +1849,7 @@ def union_launch_circles_utm(launch_latlon, radius_mi, fwd: Transformer | None):
     return poly, float(poly.area / SQM_PER_SQMI)
 
 # ---------- Outline conversion for folium ----------
+
 def polygon_outline_latlon(poly_utm, inv: Transformer):
     if poly_utm is None or poly_utm.is_empty or inv is None:
         return []
@@ -1858,6 +1858,146 @@ def polygon_outline_latlon(poly_utm, inv: Transformer):
     xs, ys = poly_utm.exterior.coords.xy
     lat, lon = _unproject_points(inv, np.asarray(xs), np.asarray(ys))
     return list(zip(lat.tolist(), lon.tolist()))
+
+# ---------------- Hardcoded specs/prices/ranges (from your CSV) --------------
+PLATFORMS = {
+    "Flock Aerodome M350": {
+        "price_per_dock": 150000,
+        "docks_per_location": 1,
+        "range_mi": 3.5,
+        "specs": {
+            "Pricing / Dock / Year (2-Year Contract)": "$150,000",
+            "Number of Docks / Location": "1",
+            "Real-world Speed (MPH)": "51 mph",
+            "Response Time (1 Mile) (sec)": "41 sec",
+            "Real-world On-scene Time (min)": "35 min",
+            "Hit License Plate at 400ft Alt": "1000 ft",
+            "Effectively Fly at 400ft Alt": "Yes",
+            "Night Vision": "Yes",
+            "Integrations": "Flock911 AD, Flock LPR, Flock NOVA, Flock Audio, CAD, Inflight LPR, Flock OS / Fusus, Evidence.com",
+        },
+    },
+    "Flock Aerodome Dock 3": {
+        "price_per_dock": 50000,
+        "docks_per_location": 2,
+        "range_mi": 3.5,
+        "specs": {
+            "Pricing / Dock / Year (2-Year Contract)": "$50,000",
+            "Number of Docks / Location": "2",
+            "Real-world Speed (MPH)": "47 mph",
+            "Response Time (1 Mile) (sec)": "47 sec",
+            "Real-world On-scene Time (min)": "40 min",
+            "Hit License Plate at 400ft Alt": "700 ft",
+            "Effectively Fly at 400ft Alt": "Yes",
+            "Night Vision": "Yes",
+            "Integrations": "Flock911 AD, Flock LPR, Flock NOVA, Flock Audio, CAD, Inflight LPR, Flock OS / Fusus, Evidence.com",
+        },
+    },
+    "Flock Aerodome Alpha": {
+        "price_per_dock": 125000,
+        "docks_per_location": 1,
+        "range_mi": 3.5,
+        "specs": {
+            "Pricing / Dock / Year (2-Year Contract)": "$125,000",
+            "Number of Docks / Location": "1",
+            "Real-world Speed (MPH)": "60 mph",
+            "Response Time (1 Mile) (sec)": "36 sec",
+            "Real-world On-scene Time (min)": "50 min",
+            "Hit License Plate at 400ft Alt": "1000 ft",
+            "Effectively Fly at 400ft Alt": "Yes",
+            "Night Vision": "Yes",
+            "Integrations": "Flock911 AD, Flock LPR, Flock NOVA, Flock Audio, CAD, Inflight LPR, Flock OS / Fusus, Evidence.com",
+        },
+    },
+    "Flock Aerodome Delta": {
+        "price_per_dock": 300000,
+        "docks_per_location": 1,
+        "range_mi": 15.0,
+        "specs": {
+            "Pricing / Dock / Year (2-Year Contract)": "$300,000",
+            "Number of Docks / Location": "1",
+            "Real-world Speed (MPH)": "100 mph",
+            "Response Time (1 Mile) (sec)": "24 sec",
+            "Real-world On-scene Time (min)": "120 min",
+            "Hit License Plate at 400ft Alt": "1000 ft",
+            "Effectively Fly at 400ft Alt": "Yes",
+            "Night Vision": "Yes",
+            "Integrations": "Flock911 AD, Flock LPR, Flock NOVA, Flock Audio, CAD, Inflight LPR, Flock OS / Fusus, Evidence.com",
+        },
+    },
+    # Competitors
+    "Skydio X10": {
+        "price_per_dock": 50000,
+        "docks_per_location": 3,
+        "range_mi": 2.0,
+        "specs": {
+            "Pricing / Dock / Year (2-Year Contract)": "$50,000",
+            "Number of Docks / Location": "3",
+            "Real-world Speed (MPH)": "30 mph",
+            "Response Time (1 Mile) (sec)": "157 sec",
+            "Real-world On-scene Time (min)": "15 min",
+            "Hit License Plate at 400ft Alt": "300 ft",
+            "Effectively Fly at 400ft Alt": "No",
+            "Night Vision": "No",
+            "Integrations": "Evidence.com, Flock OS / Fusus",
+        },
+    },
+    "Brinc Responder": {
+        "price_per_dock": 75000,
+        "docks_per_location": 3,
+        "range_mi": 2.0,
+        "specs": {
+            "Pricing / Dock / Year (2-Year Contract)": "$75,000",
+            "Number of Docks / Location": "3",
+            "Real-world Speed (MPH)": "30 mph",
+            "Response Time (1 Mile) (sec)": "157 sec",
+            "Real-world On-scene Time (min)": "15 min",
+            "Hit License Plate at 400ft Alt": "200 ft",
+            "Effectively Fly at 400ft Alt": "No",
+            "Night Vision": "No",
+            "Integrations": "None",
+        },
+    },
+    "Paladin Dock 3": {
+        "price_per_dock": 50000,
+        "docks_per_location": 2,
+        "range_mi": 2.0,
+        "specs": {
+            "Pricing / Dock / Year (2-Year Contract)": "$50,000",
+            "Number of Docks / Location": "2",
+            "Real-world Speed (MPH)": "33 mph",
+            "Response Time (1 Mile) (sec)": "61 sec",
+            "Real-world On-scene Time (min)": "35 min",
+            "Hit License Plate at 400ft Alt": "700 ft",
+            "Effectively Fly at 400ft Alt": "No",
+            "Night Vision": "Yes",
+            "Integrations": "None",
+        },
+    },
+    "Dronesense Dock 3": {
+        "price_per_dock": 40000,
+        "docks_per_location": 2,
+        "range_mi": 2.0,
+        "specs": {
+            "Pricing / Dock / Year (2-Year Contract)": "$40,000",
+            "Number of Docks / Location": "2",
+            "Real-world Speed (MPH)": "33 mph",
+            "Response Time (1 Mile) (sec)": "61 sec",
+            "Real-world On-scene Time (min)": "40 min",
+            "Hit License Plate at 400ft Alt": "700 ft",
+            "Effectively Fly at 400ft Alt": "Yes",
+            "Night Vision": "Yes",
+            "Integrations": "Axon Air, Evidence.com, Flock OS / Fusus",
+        },
+    },
+}
+
+COMPETITOR_OPTIONS = [
+    "Skydio X10",
+    "Brinc Responder",
+    "Paladin Dock 3",
+    "Dronesense Dock 3",
+]
 
 # ---------------- Pull counts & detected dock types from Launch CSV ----------
 def _get_col(df, *names):
@@ -1908,11 +2048,12 @@ our_poly_utm, OUR_CIRCLES_AREA_SQMI = union_launch_circles_utm(
     launch_coords, our_eff_range, fwd_calls
 )
 
-# First target decision (for caption)
+# Choose placement mask:
+# default = city coverage from calls; if our coverage is smaller, constrain to ours
 if calls_poly_utm is None:
     PLACEMENT_POLY_UTM = our_poly_utm
     TARGET_AREA_SQMI = OUR_CIRCLES_AREA_SQMI
-    target_label = f"Target area (fallback to our coverage): {TARGET_AREA_SQMI:.2f} sq mi"
+    target_label = f"Target area (our coverage fallback): {TARGET_AREA_SQMI:.2f} sq mi"
 else:
     if OUR_CIRCLES_AREA_SQMI < CALLS_AREA_SQMI:
         PLACEMENT_POLY_UTM = our_poly_utm
