@@ -384,6 +384,24 @@ if bundle_zip_file is not None:
     st.session_state["agency_name_guess"] = extract_agency_name(bundle_zip_file.name)
     st.sidebar.success("ZIP file processed — files loaded into their sections below.")
 
+# 0d) Agency Name (from ZIP name or manual)
+st.sidebar.header("2) Agency Name")
+
+# Initialize once from ZIP guess (before the widget is created)
+if "agency_name" not in st.session_state:
+    st.session_state["agency_name"] = st.session_state.get("agency_name_guess", "")
+
+# The widget OWNS this key. Do not write to this key anywhere else.
+st.sidebar.text_input("Enter Agency Name", key="agency_name")
+
+AGENCY_NAME = (st.session_state.get("agency_name") or "").strip()
+
+if AGENCY_NAME:
+    st.markdown(f"# {AGENCY_NAME}")
+    st.markdown("## DFR Impact Analysis")
+else:
+    st.title("DFR Impact Analysis")
+
 # 0c) Pre-populate replay_inputs from ZIP (no-ops if no ZIP)
 replay_inputs["raw"]    = _find_csv_by_partial("Raw Call Data")
 replay_inputs["agency"] = _find_csv_by_partial("Agency Call Types")
@@ -654,12 +672,6 @@ progress.progress(70)
 
 # ─── Agency details (saved with each run) ────────────────────────────────────
 with st.sidebar.expander("Agency details", expanded=True):
-    agency_name_input = st.text_input(
-        "Agency name",
-        value=st.session_state.get("manual_agency_name", ""),
-        placeholder="e.g., Fort Worth PD",
-        key="agency_name_details"  # avoid key clash with the step-1 input
-    )
     analyst_name = st.text_input("Analyst (optional)", value="", key="analyst_name")
     run_notes = st.text_area("Run notes (optional)", height=80, key="run_notes")
 
@@ -1145,19 +1157,20 @@ try:
         "total_time_on_clearable_sec": float(clr_count * avg_clr) if (np.isfinite(avg_clr)) else None,
     }
 
-    # Config/context so we can reproduce the run later
-    config_dict = {
-        "agency_name": agency_name or "unknown_agency",
-        "analyst_name": analyst_name,
-        "notes": run_notes,
-        "run_time_iso": datetime.now().isoformat(),
-        "assumptions": {
-            "fte_hours": int(fte_hours),
-            "officer_cost_usd": int(officer_cost),
-            "cancel_rate": float(cancel_rate),
-            "drone_speed_mph": float(drone_speed),
-            "drone_range_miles": float(drone_range),
-        },
+   # Config/context so we can reproduce the run later
+config_dict = {
+    "agency_name": AGENCY_NAME or "unknown_agency",
+    "analyst_name": st.session_state.get("analyst_name", ""),
+    "notes": st.session_state.get("run_notes", ""),
+    "run_time_iso": datetime.now().isoformat(),
+    "assumptions": {
+        "fte_hours": int(fte_hours),
+        "officer_cost_usd": int(officer_cost),
+        "cancel_rate": float(cancel_rate),
+        "drone_speed_mph": float(drone_speed),
+        "drone_range_miles": float(drone_range),
+    },
+}
         "launch_sites_count": len(launch_coords) if 'launch_coords' in locals() else 0,
         "hotspot": {
             "address": hotspot_address if 'hotspot_address' in locals() else None,
@@ -1201,14 +1214,14 @@ try:
             except Exception:
                 pass
 
-    run_dir = save_run(
-        agency_name or "unknown_agency",
-        config_dict=config_dict,
-        metrics_dict=metrics_dict,
-        input_files_dict=input_files_dict,
-        map_images=None,     # we can wire map snapshots later
-        pdf_bytes=None       # we’ll hook the PDF generator here later
-    )
+run_dir = save_run(
+    AGENCY_NAME or "unknown_agency",
+    config_dict=config_dict,
+    metrics_dict=metrics_dict,
+    input_files_dict=input_files_dict,
+    map_images=None,
+    pdf_bytes=None
+)
 
     st.sidebar.success(f"📦 Run saved: {run_dir}")
     st.session_state["last_run_dir"] = run_dir
