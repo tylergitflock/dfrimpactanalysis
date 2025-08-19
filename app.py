@@ -1745,102 +1745,187 @@ with st.expander("Per-site pricing details"):
         f"Discounted Total={_fmt_usd(discounted_total)}"
     )
 
-# ─── COMPARISON SECTION ──────────────────────────────────────────────────────
-st.header("📊 Platform Comparison")
+# ─── 7) COMPARISON (side-by-side) ────────────────────────────────────────────
+st.markdown("---")
+st.header("Comparison")
 
-# Load competitor specs from CSV
-try:
-    specs_df = pd.read_csv("Specs and Pricing - Specs and Pricing.csv")
-except Exception as e:
-    st.error(f"Could not load specs CSV: {e}")
-    specs_df = None
+# --- Hardcoded specs/pricing table ------------------------------------------
+# This replaces the need to upload CSV
+specs_data = {
+    "Flock Aerodome Dock 3": {
+        "Pricing / Dock / Year (2-Year Contract)": "$50,000",
+        "Number of Docks / Location": "1",
+        "Real-world Speed (MPH)": "40",
+        "Response Time (1 Mile) (sec)": "90",
+        "Real-world On-scene Time (min)": "2",
+        "Hit License Plate at 400ft Alt": "Yes",
+        "Effectively Fly at 400ft Alt": "Yes",
+        "Night Vision": "Yes",
+        "Integrations": "Full CAD, RTCC, ALPR, Audio",
+    },
+    "Flock Aerodome Alpha": {
+        "Pricing / Dock / Year (2-Year Contract)": "$125,000",
+        "Number of Docks / Location": "1",
+        "Real-world Speed (MPH)": "55",
+        "Response Time (1 Mile) (sec)": "60",
+        "Real-world On-scene Time (min)": "1.5",
+        "Hit License Plate at 400ft Alt": "Yes",
+        "Effectively Fly at 400ft Alt": "Yes",
+        "Night Vision": "Yes",
+        "Integrations": "Full CAD, RTCC, ALPR, Audio",
+    },
+    "Flock Aerodome Delta": {
+        "Pricing / Dock / Year (2-Year Contract)": "$300,000",
+        "Number of Docks / Location": "1",
+        "Real-world Speed (MPH)": "70",
+        "Response Time (1 Mile) (sec)": "30",
+        "Real-world On-scene Time (min)": "1",
+        "Hit License Plate at 400ft Alt": "Yes",
+        "Effectively Fly at 400ft Alt": "Yes",
+        "Night Vision": "Yes",
+        "Integrations": "Full CAD, RTCC, ALPR, Audio",
+    },
+    "Flock Aerodome M350": {
+        "Pricing / Dock / Year (2-Year Contract)": "TBD",
+        "Number of Docks / Location": "1",
+        "Real-world Speed (MPH)": "TBD",
+        "Response Time (1 Mile) (sec)": "TBD",
+        "Real-world On-scene Time (min)": "TBD",
+        "Hit License Plate at 400ft Alt": "TBD",
+        "Effectively Fly at 400ft Alt": "TBD",
+        "Night Vision": "TBD",
+        "Integrations": "TBD",
+    },
+    # --- Competitors (examples from your sheet, extend as needed) ------------
+    "Skydio X2": {
+        "Pricing / Dock / Year (2-Year Contract)": "$X",
+        "Number of Docks / Location": "1",
+        "Real-world Speed (MPH)": "36",
+        "Response Time (1 Mile) (sec)": "100",
+        "Real-world On-scene Time (min)": "3",
+        "Hit License Plate at 400ft Alt": "No",
+        "Effectively Fly at 400ft Alt": "No",
+        "Night Vision": "Yes",
+        "Integrations": "Limited",
+    },
+}
 
-if specs_df is not None:
-    # Our platform (left-hand side)
-    st.subheader("Flock Aerodome (Our Platform)")
-    col1, col2 = st.columns(2)
+product_names = list(specs_data.keys())
 
-    with col1:
-        st.markdown("### Flock Aerodome")
-        # Map placeholder (later: render properly)
-        st.map(launch_df[["Lat", "Lon"]])  # placeholder for left map
+# --- Pricing constants (yearly, no CAPEX), discount handling ---------------
+DOCK_PRICES = {
+    "Dock 3": 50000,
+    "Alpha": 125000,
+    "Delta": 300000,
+    "M350": 0,
+}
+RADAR_PRICE = 150000
 
-        # Launch stats
-        launch_count = len(launch_df) if launch_df is not None else 0
-        docks_count = (
-            launch_df["Number of Docks"].sum() if "Number of Docks" in launch_df else 0
+# Pull counts from Launch CSV (case tolerant headers)
+def _get_col(df, *names):
+    colmap = {c.lower().strip(): c for c in df.columns}
+    for n in names:
+        c = colmap.get(n.lower().strip())
+        if c: return df[c]
+    return None
+
+dock_type_col   = _get_col(launch_rows, "Dock Type", "Drone Type", "Dock Type or Drone Type")
+docks_col       = _get_col(launch_rows, "Number of Docks")
+radars_col      = _get_col(launch_rows, "Number of Radar")
+
+launch_count = len(launch_rows)
+total_docks  = int(pd.to_numeric(docks_col, errors="coerce").fillna(0).sum()) if docks_col is not None else 0
+total_radars = int(pd.to_numeric(radars_col, errors="coerce").fillna(0).sum()) if radars_col is not None else 0
+
+# Determine our recommended product label from the Launch CSV, fallback = Dock 3
+def _pick_our_product():
+    if dock_type_col is not None and not dock_type_col.empty:
+        vals = (
+            dock_type_col.astype(str)
+            .str.strip()
+            .str.replace("Flock Aerodome ", "", regex=False)
+            .replace({"DELTA": "Delta", "ALPHA": "Alpha", "DOCK 3": "Dock 3", "M350": "M350"}, regex=True)
         )
-        radars_count = (
-            launch_df["Number of Radar"].sum() if "Number of Radar" in launch_df else 0
+        if vals.notna().any():
+            top = vals.value_counts().idxmax()
+            label = f"Flock Aerodome {top}" if top.upper() != "M350" else "Flock Aerodome M350"
+            if label in product_names:
+                return label
+    # NEW: default to Dock 3 instead of Delta
+    return "Flock Aerodome Dock 3"
+
+our_product = _pick_our_product()
+
+# Per-row dock price
+def _dock_price_for_row(row):
+    if dock_type_col is not None and dock_type_col.name in row:
+        dt = str(row[dock_type_col.name]).strip().replace("Flock Aerodome ", "")
+    else:
+        dt = "Dock 3"  # default if missing
+    return DOCK_PRICES.get(dt, 0)
+
+# Yearly price (no discount)
+def compute_yearly_price(disc_pct: float = 0.0):
+    if launch_rows.empty:
+        base = 0
+    else:
+        _rows = launch_rows.copy()
+        _rows["_docks"] = pd.to_numeric(docks_col, errors="coerce").fillna(0) if docks_col is not None else 0
+        _rows["_radars"] = pd.to_numeric(radars_col, errors="coerce").fillna(0) if radars_col is not None else 0
+        _rows["_dock_price"] = _rows.apply(_dock_price_for_row, axis=1)
+        base = int((_rows["_docks"] * _rows["_dock_price"]).sum() + _rows["_radars"].sum() * RADAR_PRICE)
+    disc = float(disc_pct or 0.0)
+    disc_total = int(round(base * (1.0 - disc))) if disc > 0 else None
+    return base, disc_total
+
+# Discount input
+c_disc1, c_disc2 = st.columns([1,3])
+with c_disc1:
+    discount_pct_input = st.number_input("Discount (%)", min_value=0, max_value=100, value=0, step=1)
+discount_fraction = float(discount_pct_input) / 100.0
+
+base_total, discounted_total = compute_yearly_price(discount_fraction)
+
+# Competitor chooser
+competitors = [p for p in product_names if not p.startswith("Flock Aerodome")]
+comp_choice = st.selectbox("Compare against", competitors, index=0 if competitors else None)
+
+# --- Helper: draw panel ------------------------------------------------------
+def panel(title, product_name, left=True):
+    with st.container(border=True):
+        st.subheader(title)
+
+        render_map(
+            all_dfr,
+            heat=True,
+            heat_radius=8, heat_blur=12,
+            title="",
+            key=f"cmp_map_{'L' if left else 'R'}_{product_name}",
+            show_circle=True,
+            launch_coords=launch_coords
         )
 
-        # Use Dock Type or default to Dock 3
-        dock_types = (
-            launch_df["Dock Type"].fillna("Dock 3").unique().tolist()
-            if "Dock Type" in launch_df
-            else ["Dock 3"]
-        )
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Launch Locations", f"{launch_count:,}")
+        c2.metric("Total Docks", f"{total_docks:,}")
+        if discount_fraction > 0 and discounted_total is not None:
+            c3.metric("Yearly Cost (discounted)", f"${discounted_total:,}")
+            st.caption(f"Base price (pre-discount): ${base_total:,}")
+        else:
+            c3.metric("Yearly Cost", f"${base_total:,}")
 
-        # Pricing
-        PRICES = {"Dock 3": 50000, "Alpha": 125000, "Delta": 300000, "M350": 0}  
-        RADAR_PRICE = 150000
+        if product_name in specs_data:
+            specs = specs_data[product_name]
+            for r, v in specs.items():
+                st.write(f"**{r}**: {v}")
+        else:
+            st.info("No specs found for this product.")
 
-        yearly_cost = (
-            sum(PRICES.get(dt, PRICES["Dock 3"]) for dt in dock_types) * docks_count
-        ) + (radars_count * RADAR_PRICE)
+# --- Two panels side by side -------------------------------------------------
+L, R = st.columns(2)
+with L:
+    panel("Flock Aerodome (recommended)", our_product, left=True)
+with R:
+    panel(comp_choice, comp_choice, left=False)
 
-        st.metric("Launch Locations", launch_count)
-        st.metric("Total Docks", docks_count)
-        st.metric("Yearly Cost", f"${yearly_cost:,.0f}")
-
-        # Our specs (from CSV first row where Platform == "Flock Aerodome Delta")
-        our_specs = specs_df[specs_df["Platform"].str.contains("Flock Aerodome")].iloc[0]
-        st.write("#### Platform Specs")
-        for spec in [
-            "Pricing / Dock",
-            "Number of Docks / Location",
-            "Real-world Speed",
-            "Response Time (1 Mile)",
-            "Real-world On Scene Time",
-            "Hit License Plate at 400ft Alt",
-            "Effectively Fly at 400ft Alt",
-            "Night Vision",
-            "Integrations",
-        ]:
-            val = our_specs.get(spec, "N/A")
-            st.write(f"**{spec}:** {val}")
-
-    # Competitor (right-hand side)
-    with col2:
-        competitor_options = specs_df[
-            ~specs_df["Platform"].str.contains("Flock Aerodome")
-        ]["Platform"].tolist()
-
-        selected_competitor = st.selectbox(
-            "Select Competitor", competitor_options, index=0
-        )
-
-        st.markdown(f"### {selected_competitor}")
-        st.map(launch_df[["Lat", "Lon"]])  # placeholder for right map
-
-        # Competitor specs
-        comp_specs = specs_df[specs_df["Platform"] == selected_competitor].iloc[0]
-
-        st.metric("Launch Locations", "N/A")  # no launch CSV for competitors yet
-        st.metric("Total Docks", comp_specs.get("Number of Docks / Location", "N/A"))
-        st.metric("Yearly Cost", comp_specs.get("Pricing / Dock", "N/A"))
-
-        st.write("#### Platform Specs")
-        for spec in [
-            "Pricing / Dock",
-            "Number of Docks / Location",
-            "Real-world Speed",
-            "Response Time (1 Mile)",
-            "Real-world On Scene Time",
-            "Hit License Plate at 400ft Alt",
-            "Effectively Fly at 400ft Alt",
-            "Night Vision",
-            "Integrations",
-        ]:
-            val = comp_specs.get(spec, "N/A")
-            st.write(f"**{spec}:** {val}")
+st.caption("Note: Maps currently reuse your DFR points + range circle as a placeholder. We’ll swap in competitor coverage logic next.")
