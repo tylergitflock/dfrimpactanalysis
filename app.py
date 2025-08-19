@@ -1154,14 +1154,14 @@ try:
         "audio_eta_sec": float(audio_eta) if ('audio_eta' in locals() and np.isfinite(audio_eta)) else None,
         "clearable_in_range": int(clr_count),
         "avg_clearable_scene_sec": float(avg_clr) if np.isfinite(avg_clr) else None,
-        "total_time_on_clearable_sec": float(clr_count * avg_clr) if (np.isfinite(avg_clr)) else None,
+        "total_time_on_clearable_sec": float(clr_count * avg_clr) if np.isfinite(avg_clr) else None,
     }
 
-       # Config/context so we can reproduce the run later
+    # Config/context so we can reproduce the run later
     config_dict = {
         "agency_name": AGENCY_NAME or "unknown_agency",
-        "analyst_name": st.session_state.get("analyst_name", ""),
-        "notes": st.session_state.get("run_notes", ""),
+        "analyst_name": (analyst_name if 'analyst_name' in locals() else st.session_state.get("analyst_name", "")),
+        "notes": (run_notes if 'run_notes' in locals() else st.session_state.get("run_notes", "")),
         "run_time_iso": datetime.now().isoformat(),
         "assumptions": {
             "fte_hours": int(fte_hours),
@@ -1170,7 +1170,6 @@ try:
             "drone_speed_mph": float(drone_speed),
             "drone_range_miles": float(drone_range),
         },
-    }
         "launch_sites_count": len(launch_coords) if 'launch_coords' in locals() else 0,
         "hotspot": {
             "address": hotspot_address if 'hotspot_address' in locals() else None,
@@ -1205,23 +1204,23 @@ try:
     # If a ZIP was uploaded, save it as well for replay
     if bundle_zip_file is not None:
         input_files_dict["bundle.zip"] = bundle_zip_file
-    
+
     # Rewind streams so save_run can read them from the start
-    for _f in list(input_files_dict.values()):
+    for _f in input_files_dict.values():
         if _f is not None and hasattr(_f, "seek"):
             try:
                 _f.seek(0)
             except Exception:
                 pass
 
-run_dir = save_run(
-    AGENCY_NAME or "unknown_agency",
-    config_dict=config_dict,
-    metrics_dict=metrics_dict,
-    input_files_dict=input_files_dict,
-    map_images=None,
-    pdf_bytes=None
-)
+    run_dir = save_run(
+        AGENCY_NAME or "unknown_agency",
+        config_dict=config_dict,
+        metrics_dict=metrics_dict,
+        input_files_dict=input_files_dict,
+        map_images=None,
+        pdf_bytes=None
+    )
 
     st.sidebar.success(f"📦 Run saved: {run_dir}")
     st.session_state["last_run_dir"] = run_dir
