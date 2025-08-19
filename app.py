@@ -1637,3 +1637,108 @@ if audio_pts is not None and not audio_pts.empty:
     )
 else:
     st.sidebar.info("No audio points to display on the heatmap.")
+
+
+# ─── 7) PRICING ───────────────────────────────────────────────────────────────
+st.markdown("---")
+st.header("Pricing")
+
+# --- Yearly unit prices (no CapEx) ---
+PRICE_PER_DOCK_BY_TYPE = {
+    "DOCK 3": 50000,
+    "ALPHA": 125000,
+    "DELTA": 300000,
+}
+PRICE_PER_RADAR = 150000  # yearly
+
+# Ensure optional pricing columns exist in launch_rows
+# Expected columns: ["Location Name","Address","Lat","Lon","Type","Drone Type","Docks","Radars"]
+# (Type should already be "Launch Location" for launch_rows)
+for col, default in [("Drone Type", ""), ("Docks", 0), ("Radars", 0)]:
+    if col not in launch_rows.columns:
+        launch_rows[col] = default
+
+# Normalize and coerce
+_lr = launch_rows.copy()
+_lr["Drone Type"] = _lr["Drone Type"].astype(str).str.strip().str.upper()
+_lr["Docks"] = pd.to_numeric(_lr["Docks"], errors="coerce").fillna(0).astype(int)
+_lr["Radars"] = pd.to_numeric(_lr["Radars"], errors="coerce").fillna(0).astype(int)
+
+# Compute per-site costs
+def dock_unit_price(drone_type):
+    return PRICE_PER_DOCK_BY_TYPE.get(str(drone_type).upper().strip(), 0)
+
+_lr["Dock Unit Price"]  = _lr["Drone Type"].map(dock_unit_price)
+_lr["Dock Yearly Cost"] = (_lr["Docks"] * _lr["Dock Unit Price"]).astype(int)
+_lr["Radar Yearly Cost"] = (_lr["Radars"] * PRICE_PER_RADAR).astype(int)
+_lr["Site Yearly Total"] = (_lr["Dock Yearly Cost"] + _lr["Radar Yearly Cost"]).astype(int)
+
+# Totals
+total_launch_sites = len(_lr)
+total_docks  = int(_lr["Docks"].sum())
+total_radars = int(_lr["Radars"].sum())
+list_total   = int(_lr["Site Yearly Total"].sum())
+
+# Discount input (sidebar)
+st.sidebar.header("Pricing Options")
+discount_pct = st.sidebar.number_input("Discount (%)", min_value=0.0, max_value=100.0, value=0.0, step=1.0, key="pricing_discount_pct")
+discount_rate = float(discount_pct) / 100.0
+discount_amount = int(round(list_total * discount_rate))
+discounted_total = int(list_total - discount_amount)
+
+# Recommended drone type(s): based on CSV values present
+present_types = [t for t in _lr["Drone Type"].unique().tolist() if t]
+# If you want a single “recommended”, pick the type with the most docks
+if len(present_types) > 1:
+    top_type = (_lr.groupby("Drone Type")["Docks"].sum().sort_values(ascending=False).index.tolist() or [""])[0]
+    recommended_label = f"{', '.join(present_types)}  (top: {top_type})"
+else:
+    recommended_label = present_types[0] if present_types else "—"
+
+# --- Pricing map (its own rendering) ---
+st.subheader("Pricing Map (Launch Sites + Range)")
+pricing_pts = pd.DataFrame({
+    "lat": pd.to_numeric(_lr["Lat"], errors="coerce"),
+    "lon": pd.to_numeric(_lr["Lon"], errors="coerce")
+}).dropna(subset=["lat","lon"])
+render_map(
+    pricing_pts,
+    heat=False,
+    title="",
+    key="map_pricing",
+    show_circle=True,
+    launch_coords=launch_coords
+)
+
+# --- Summary row ---
+def _fmt_usd(x): return f"${x:,.0f}"
+
+c1, c2, c3, c4 = st.columns(4)
+c1.metric("Launch Locations", f"{total_launch_sites:,}")
+c2.metric("Total Docks", f"{total_docks:,}")
+c3.metric("Total Radars", f"{total_radars:,}")
+c4.metric("Recommended Drone Type(s)", recommended_label)
+
+c5, c6 = st.columns(2)
+c5.metric("Yearly Cost (List)", _fmt_usd(list_total))
+c6.metric(f"Yearly Cost (Discounted {int(discount_pct)}%)", _fmt_usd(discounted_total))
+
+# --- Expandable per-site breakdown ---
+with st.expander("Per-site pricing details"):
+    detail_df = _lr[[
+        "Location Name", "Address", "Drone Type", "Docks", "Dock Unit Price",
+        "Dock Yearly Cost", "Radars", "Radar Yearly Cost", "Site Yearly Total"
+    ]].copy()
+    # Nice formatting for display
+    _money_cols = ["Dock Unit Price", "Dock Yearly Cost", "Radar Yearly Cost", "Site Yearly Total"]
+    for mc in _money_cols:
+        detail_df[mc] = detail_df[mc].map(lambda v: _fmt_usd(int(v)))
+
+    st.dataframe(detail_df, use_container_width=True)
+
+    # Totals row (rendered separately under the table)
+    st.caption(
+        f"**Totals:** Docks={total_docks:,} • Radars={total_radars:,} • "
+        f"List={_fmt_usd(list_total)} • Discount={_fmt_usd(discount_amount)} • "
+        f"Discounted Total={_fmt_usd(discounted_total)}"
+    )
