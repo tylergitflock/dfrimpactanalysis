@@ -656,11 +656,15 @@ progress.progress(70)
 
 # ─── Agency details (saved with each run) ────────────────────────────────────
 with st.sidebar.expander("Agency details", expanded=True):
-   agency_name = st.text_input("Agency name",
-                            value=st.session_state.get("manual_agency_name", ""),
-                            placeholder="e.g., Fort Worth PD")
+    agency_name = st.text_input(
+        "Agency name",
+        value=st.session_state.get("manual_agency_name", ""),
+        placeholder="e.g., Fort Worth PD"
+    )
     analyst_name = st.text_input("Analyst (optional)", value="")
     run_notes = st.text_area("Run notes (optional)", height=80)
+
+# Default back to manual agency name if left blank
 agency_name = agency_name or st.session_state.get("manual_agency_name", "")
 
 st.sidebar.header("5) ALPR & Audio (optional)")
