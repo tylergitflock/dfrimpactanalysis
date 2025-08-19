@@ -1749,6 +1749,9 @@ with st.expander("Per-site pricing details"):
 st.markdown("---")
 st.header("Comparison")
 
+CMP_MAP_KEY_L = "cmp_map_left"
+CMP_MAP_KEY_R = "cmp_map_right"
+
 # --- Hardcoded specs/pricing (metrics = rows, products = columns) -----------
 SPEC_ROWS_ORDER = [
     "Pricing / Dock / Year (2-Year Contract)",
@@ -1955,7 +1958,7 @@ def panel(title, product_key_for_specs, launches, docks, base_price, disc_price,
             heat=True,
             heat_radius=8, heat_blur=12,
             title="",
-            key=f"cmp_map_{'L' if is_left else 'R'}_{uuid.uuid4().hex[:6]}",
+            key=(CMP_MAP_KEY_L if is_left else CMP_MAP_KEY_R),  # ← stable, no uuid
             show_circle=True,
             launch_coords=launch_coords
         )
