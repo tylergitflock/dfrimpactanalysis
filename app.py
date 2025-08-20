@@ -536,9 +536,11 @@ if launch_file is not None:
         "Loaded launch locations from saved run." if launch_src == "replay"
         else "Using uploaded launch locations file."
     )
+    # Load the CSV and pull metadata in one place
     launch_df, _meta_agency, _meta_sqmi = _load_launch_locations_csv(launch_file)
+
     try:
-        launch_file.seek(0)
+        launch_file.seek(0)  # reset pointer just in case
     except Exception:
         pass
 else:
@@ -553,13 +555,19 @@ else:
     )
     _meta_agency, _meta_sqmi = None, None
 
-# ─── Apply metadata ──────────────────────────────────────
+# ─── Safely push metadata into session state ─────────────────────────────
 
-if _meta_agency and not (st.session_state.get("agency_name") or "").strip():
-    st.session_state["agency_name"] = _meta_agency
+if _meta_agency:
+    if "agency_name" not in st.session_state:
+        st.session_state["agency_name"] = _meta_agency
+    elif not (st.session_state.get("agency_name") or "").strip():
+        st.session_state["agency_name"] = _meta_agency
 
 if _meta_sqmi and _meta_sqmi > 0:
-    st.session_state["city_area_sqmi"] = float(_meta_sqmi)
+    if "city_area_sqmi" not in st.session_state:
+        st.session_state["city_area_sqmi"] = float(_meta_sqmi)
+    elif not st.session_state.get("city_area_sqmi"):
+        st.session_state["city_area_sqmi"] = float(_meta_sqmi)
 
 # 2b) Normalize headers and make sure required columns exist
 launch_df.columns = [c.strip() for c in launch_df.columns]
