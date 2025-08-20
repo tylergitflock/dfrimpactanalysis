@@ -484,31 +484,35 @@ def _load_launch_locations_csv(file_obj):
     from io import BytesIO
 
     raw = file_obj.read()
-    file_obj.seek(0)  # reset pointer so we can reuse file_obj downstream
-
     try:
         # Try to sniff "new" format
         df0 = pd.read_csv(BytesIO(raw), header=None, dtype=str, keep_default_na=False)
+        looks_new = False
         if df0.shape[0] >= 3 and df0.shape[1] >= 2:
             a1 = str(df0.iat[0, 0]).strip().lower()
             a2 = str(df0.iat[1, 0]).strip().lower()
-            if ("agency" in a1 and "name" in a1) and ("sq" in a2 and "mi" in a2):
-                meta_agency = (df0.iat[0, 1] or "").strip() or None
-                try:
-                    meta_sqmi = float(str(df0.iat[1, 1]).replace(",", "").strip())
-                except Exception:
-                    meta_sqmi = None
+            looks_new = ("agency" in a1 and "name" in a1) and ("sq" in a2 and "mi" in a2)
 
-                headers = df0.iloc[2].tolist()
-                data = df0.iloc[3:].copy()
-                data.columns = headers
-                return data.reset_index(drop=True), meta_agency, meta_sqmi
+        if looks_new:
+            meta_agency = (df0.iat[0, 1] or "").strip() or None
+            try:
+                meta_sqmi = float(str(df0.iat[1, 1]).replace(",", "").strip())
+            except Exception:
+                meta_sqmi = None
 
-        # fallback: old style
+            # Row 3 = headers, Row 4+ = data
+            headers = df0.iloc[2].tolist()
+            data = df0.iloc[3:].copy()
+            data.columns = headers
+
+            return data.reset_index(drop=True), meta_agency, meta_sqmi
+
+        # fallback: old style CSV
         df_old = pd.read_csv(BytesIO(raw))
         return df_old, None, None
 
     except Exception:
+        # If anything breaks, fallback to old style
         df_old = pd.read_csv(BytesIO(raw))
         return df_old, None, None
 
