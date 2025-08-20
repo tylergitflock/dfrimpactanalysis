@@ -386,24 +386,6 @@ if bundle_zip_file is not None:
     st.session_state["agency_name_guess"] = extract_agency_name(bundle_zip_file.name)
     st.sidebar.success("ZIP file processed — files loaded into their sections below.")
 
-# 0d) Agency Name (from ZIP name or manual)
-st.sidebar.header("2) Agency Name")
-
-# Initialize once from ZIP guess (before the widget is created)
-if "agency_name" not in st.session_state:
-    st.session_state["agency_name"] = st.session_state.get("agency_name_guess", "")
-
-# The widget OWNS this key. Do not write to this key anywhere else.
-st.sidebar.text_input("Enter Agency Name", key="agency_name")
-
-AGENCY_NAME = (st.session_state.get("agency_name") or "").strip()
-
-if AGENCY_NAME:
-    st.markdown(f"# {AGENCY_NAME}")
-    st.markdown("## DFR Impact Analysis")
-else:
-    st.title("DFR Impact Analysis")
-
 # 0c) Pre-populate replay_inputs from ZIP (no-ops if no ZIP)
 replay_inputs["raw"]    = _find_csv_by_partial("Raw Call Data")
 replay_inputs["agency"] = _find_csv_by_partial("Agency Call Types")
@@ -664,6 +646,24 @@ if not valid_coords.all():
 launch_rows["Lat"] = pd.to_numeric(launch_rows["Lat"], errors="coerce")
 launch_rows["Lon"] = pd.to_numeric(launch_rows["Lon"], errors="coerce")
 launch_coords = list(launch_rows[["Lat","Lon"]].itertuples(index=False, name=None))
+
+# 0d) Agency Name (from ZIP name or manual)
+st.sidebar.header("2) Agency Name")
+
+# Initialize once from ZIP guess (before the widget is created)
+if "agency_name" not in st.session_state:
+    st.session_state["agency_name"] = st.session_state.get("agency_name_guess", "")
+
+# The widget OWNS this key. Do not write to this key anywhere else.
+st.sidebar.text_input("Enter Agency Name", key="agency_name")
+
+AGENCY_NAME = (st.session_state.get("agency_name") or "").strip()
+
+if AGENCY_NAME:
+    st.markdown(f"# {AGENCY_NAME}")
+    st.markdown("## DFR Impact Analysis")
+else:
+    st.title("DFR Impact Analysis")
 
 progress.progress(30)
 
