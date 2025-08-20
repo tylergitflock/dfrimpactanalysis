@@ -650,9 +650,13 @@ launch_coords = list(launch_rows[["Lat","Lon"]].itertuples(index=False, name=Non
 # 0d) Agency Name (from ZIP name or manual)
 st.sidebar.header("2) Agency Name")
 
-# Initialize once from ZIP guess (before the widget is created)
-if "agency_name" not in st.session_state:
-    st.session_state["agency_name"] = st.session_state.get("agency_name_guess", "")
+# Initialize once from Launch-CSV metadata or ZIP guess
+if "agency_name" not in st.session_state or not (st.session_state["agency_name"] or "").strip():
+    st.session_state["agency_name"] = (
+        st.session_state.get("agency_name") 
+        or (_meta_agency or "") 
+        or st.session_state.get("agency_name_guess", "")
+    )
 
 # The widget OWNS this key. Do not write to this key anywhere else.
 st.sidebar.text_input("Enter Agency Name", key="agency_name")
