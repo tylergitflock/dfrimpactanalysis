@@ -1785,77 +1785,87 @@ def _unproject_points(inv: Transformer, xs, ys):
     return np.asarray(lat), np.asarray(lon)
 
 # ---------- City limits from call data (concave hull in meters) ----------
-def calls_concave_hull_utm(lat, lon, eps_m=1500, min_samples=20,
-                           alpha=None, buffer_smooth_m=300, simplify_m=100):
+def calls_concave_hull_utm(
+    lat, lon,
+    eps_m=None,                 # auto if None
+    min_samples=20,
+    alpha=None,                 # auto if None
+    buffer_smooth_m=220,        # slightly smaller smoothing
+    simplify_m=60,              # less aggressive simplify
+    shrink_m=180                # final inward buffer to tighten boundary
+):
     """
-    Return (polygon_UTM, area_sqmi, (fwd, inv)) from call points in local UTM.
-    Robust to NaNs, duplicates, collinear points, and alphashape failures.
+    Build a concave hull (alphashape) in local UTM from call points and return
+    (polygon_utm, area_sqmi, (fwd, inv)).
+
+    Heuristics aimed to avoid oversized polygons:
+      - DBSCAN eps auto-scales from data density (median NN distance)
+      - alpha uses a lower quantile (q=0.35) of NN distances
+      - final negative buffer (shrink_m) to pull in edges
     """
     lat = pd.to_numeric(pd.Series(lat), errors="coerce")
     lon = pd.to_numeric(pd.Series(lon), errors="coerce")
-
-    # 1) keep only finite lon/lat
-    mask = lat.notna() & lon.notna() & np.isfinite(lat) & np.isfinite(lon)
+    mask = lat.notna() & lon.notna()
     if mask.sum() < 10:
         return None, 0.0, (None, None)
 
-    # 2) project to meters (UTM) and re-filter to finite XY
     fwd, inv = _make_transformers(lat[mask].values, lon[mask].values)
     X, Y = _project_points(fwd, lat[mask].values, lon[mask].values)
     XY = np.c_[X, Y]
-    XY = XY[np.isfinite(XY).all(axis=1)]
 
-    # 3) dedupe exact duplicates; need enough left
-    if len(XY) == 0:
-        return None, 0.0, (fwd, inv)
-    XY = np.unique(XY, axis=0)
-    if len(XY) < 3:
-        return None, 0.0, (fwd, inv)
-
-    # 4) outlier removal with DBSCAN (guard against failures)
-    try:
-        labels = DBSCAN(eps=float(eps_m), min_samples=int(min_samples)).fit_predict(XY)
-        if (labels >= 0).sum() > 0:
-            labs, cnts = np.unique(labels[labels >= 0], return_counts=True)
-            keep_lab = labs[np.argmax(cnts)]
-            XY = XY[labels == keep_lab]
-    except Exception:
-        pass
-
-    if len(XY) < 3:
+    # nearest-neighbor scale (meters)
+    from sklearn.neighbors import NearestNeighbors
+    nn = NearestNeighbors(n_neighbors=2).fit(XY)
+    dists, _ = nn.kneighbors(XY)
+    # dists[:,0] == 0 (self); use 1st neighbor
+    d1 = dists[:, 1]
+    d1 = d1[np.isfinite(d1)]
+    if len(d1) == 0:
         return None, 0.0, (fwd, inv)
 
-    # 5) choose alpha if not provided (median 1-NN distance)
+    med = float(np.median(d1))
+    if not np.isfinite(med) or med <= 0:
+        med = 600.0  # fallback scale (m)
+
+    # ---- DBSCAN: auto eps if not provided
+    if eps_m is None:
+        # 2.5× median NN, clamped to sensible range
+        eps_m = float(np.clip(2.5 * med, 500.0, 2500.0))
+
+    labels = DBSCAN(eps=eps_m, min_samples=min_samples).fit_predict(XY)
+    # Keep largest non-noise cluster if any
+    keep_mask = np.ones(len(XY), dtype=bool)
+    if (labels >= 0).any():
+        labs, cnts = np.unique(labels[labels >= 0], return_counts=True)
+        keep_lab = labs[np.argmax(cnts)]
+        keep_mask = labels == keep_lab
+    XYk = XY[keep_mask]
+    if len(XYk) < 3:
+        return None, 0.0, (fwd, inv)
+
+    # ---- alpha: tighter quantile (q=0.35) for a smaller hull
     if alpha is None:
-        from sklearn.neighbors import NearestNeighbors
-        nbrs = NearestNeighbors(n_neighbors=2, algorithm="auto").fit(XY)
-        dists, _ = nbrs.kneighbors(XY, return_distance=True)
-        dmin = dists[:, 1]
-        med = float(np.median(dmin)) if np.isfinite(dmin).all() and np.median(dmin) > 0 else 1.0
-        alpha = 1.0 / med
+        nn2 = NearestNeighbors(n_neighbors=2).fit(XYk)
+        d2, _ = nn2.kneighbors(XYk)
+        dmin = d2[:, 1]
+        q = float(np.quantile(dmin[np.isfinite(dmin)], 0.35)) if np.isfinite(dmin).any() else 1.0
+        alpha = 1.0 / max(q, 1.0)
 
-    # 6) alpha shape with safe fallback to convex hull
-    pts = [Point(float(x), float(y)) for x, y in XY]
-    poly = None
-    try:
-        poly = alphashape.alphashape(pts, alpha)
-    except Exception:
-        poly = None
+    pts = [Point(float(x), float(y)) for x, y in XYk]
+    poly = alphashape.alphashape(pts, alpha)
 
     if not poly or poly.is_empty:
-        poly = MultiPoint(pts).convex_hull  # fallback (can be Polygon or LineString)
-
-    # If hull collapses to a line/zero-area, thicken slightly (1 m) so it’s plottable
-    if poly.is_empty:
         return None, 0.0, (fwd, inv)
-    if getattr(poly, "geom_type", "") == "LineString" or float(poly.area) == 0.0:
-        poly = poly.buffer(1.0)  # meters
-
     if poly.geom_type == "MultiPolygon":
         poly = max(poly.geoms, key=lambda p: p.area)
 
-    # 7) Smooth/simplify in meters
-    poly = poly.buffer(buffer_smooth_m).simplify(simplify_m).buffer(-buffer_smooth_m).buffer(0)
+    # smooth a bit, then shrink inwards to counter overreach
+    poly = poly.buffer(buffer_smooth_m).simplify(simplify_m).buffer(-buffer_smooth_m)
+    if shrink_m and not poly.is_empty:
+        poly = poly.buffer(-shrink_m)
+
+    # clean up tiny artifacts
+    poly = poly.buffer(0)
     if poly.is_empty:
         return None, 0.0, (fwd, inv)
 
@@ -2332,15 +2342,16 @@ def panel(title, product_names_list, is_left=True, competitor=None):
         else:
             render_specs(product_names_list[0] if product_names_list else competitor)
 
-# ---- Two columns: Aerodome vs Competitor -----------------------------------
+# ---- Controls row + two panels ---------------------------------------------
+topL, topR = st.columns([3, 2])
+with topL:
+    # show the single target label once (not twice)
+    st.caption(target_label)
+with topR:
+    comp_choice = st.selectbox("Compare against", COMPETITOR_OPTIONS, index=0, key="cmp_choice")
+
 L, R = st.columns(2)
 with L:
     panel(aerodome_title, detected_types_list if is_multi else detected_types_list[:1], is_left=True)
 with R:
-    comp_choice = st.selectbox("Compare against", COMPETITOR_OPTIONS, index=0, key="cmp_choice")
     panel(comp_choice, [], is_left=False, competitor=comp_choice)
-
-st.caption(
-    "City limits default to a concave hull from call locations (no GeoPandas). "
-    "Competitor counts use that area; sites are placed inside the polygon via K-Means over call density."
-)
