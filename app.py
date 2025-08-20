@@ -1505,6 +1505,21 @@ metric_row(
     ("Clearable CFS In Range", clr_count, "int"),
 )
 
+# ==== FAA overlay data (load once per run) ===================================
+_lats = list(df_all["lat"].dropna().astype(float).values)
+_lons = list(df_all["lon"].dropna().astype(float).values)
+for la, lo in launch_coords:
+    _lats.append(float(la))
+    _lons.append(float(lo))
+
+FAA_GEOJSON = None
+faa_bbox = _data_bbox(_lats, _lons, pad=0.05)
+try:
+    FAA_GEOJSON = load_esri_geojson(FAA_LAYER_URL, bbox=faa_bbox)
+except Exception as _e:
+    FAA_GEOJSON = None
+    st.sidebar.warning(f"FAA layer failed to load: {_e}")
+
 # ─── 6) MAPS & HEATMAPS ──────────────────────────────────────────────────────
 st.markdown("---")
 st.header("Maps & Heatmaps")
@@ -1641,7 +1656,7 @@ render_map(
     key="map_range_circle",
     show_circle=True,
     launch_coords=launch_coords,
-    geojson_overlays=[("FAA Grid", FAA_GEOJSON)],   # ← FAA overlay here only
+    geojson_overlays=[("FAA Grid", FAA_GEOJSON)] if FAA_GEOJSON else None,
 )
 metrics_under(
     "Range — key stats",
@@ -1843,21 +1858,6 @@ render_map(
     show_circle=True,
     launch_coords=launch_coords
 )
-
-# ==== FAA overlay data (load once per run) ===================================
-_lats = list(df_all["lat"].dropna().astype(float).values)
-_lons = list(df_all["lon"].dropna().astype(float).values)
-for la, lo in launch_coords:
-    _lats.append(float(la))
-    _lons.append(float(lo))
-
-FAA_GEOJSON = None
-faa_bbox = _data_bbox(_lats, _lons, pad=0.05)
-try:
-    FAA_GEOJSON = load_esri_geojson(FAA_LAYER_URL, bbox=faa_bbox)
-except Exception as _e:
-    FAA_GEOJSON = None
-    st.sidebar.warning(f"FAA layer failed to load: {_e}")
 
 # --- Summary row ---
 def _fmt_usd(x): return f"${x:,.0f}"
@@ -2331,31 +2331,24 @@ def place_sites_kmeans_in_polygon(lat, lon, polygon_utm, n_sites, fwd: Transform
 # ---------------- Panel renderer (unchanged other than using TARGET_AREA_SQMI) ----------
 def panel(title, product_names_list, is_left=True, competitor=None):
     with st.container(border=True):
-        st.subheader(title)
+        # Only render a header if there is one (prevents extra blank space)
+        if title:
+            st.subheader(title)
 
         if is_left:
-            # Left = our heat + blue range circles from actual launch sites
+            # LEFT: our heatmap + blue range circles + FAA overlay
             render_map(
-                df_all,                         # (or all_dfr if you prefer)
+                df_all,                         # you can switch to dfr_only if desired
                 heat=True,
                 heat_radius=8, heat_blur=12,
-                title="",
+                title="",                        # no extra title to avoid spacing
                 key=f"cmp_map_L_{title}",
                 show_circle=True,
                 launch_coords=launch_coords,
-                geojson_overlays=[("FAA Grid", FAA_GEOJSON)],   # ← FAA on left map
+                geojson_overlays=[("FAA Grid", FAA_GEOJSON)] if FAA_GEOJSON else None,
             )
-        
-            # ← ADD THESE THREE METRICS (mirror the competitor side)
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Required Locations", f"{launch_count:,}")   # len(launch_rows)
-            c2.metric("Total Docks",        f"{total_docks:,}")    # sum(Number of Docks)
-            c3.metric("Yearly Cost",        f"${our_base:,}")      # from compute_our_yearly_price_no_discount()
-        
-            # Optional context line (keep or remove)
-            # st.caption(f"Docks listed in CSV: {total_docks:,} • Radars: {total_radars:,}")
         else:
-            # Right = competitor circles; count driven by TARGET_AREA_SQMI (CSV-based, min with our coverage)
+            # RIGHT: competitor centers chosen inside polygon via K-Means on calls
             plan = competitor_plan(competitor, TARGET_AREA_SQMI)
             required_locs = plan["locations"]
             comp_range_mi = plan["range_mi"]
@@ -2368,7 +2361,7 @@ def panel(title, product_names_list, is_left=True, competitor=None):
                 fwd=fwd, inv=inv
             )
 
-            # Center the map roughly where we have data
+            # map center fallback
             if launch_coords:
                 lat0, lon0 = float(launch_coords[0][0]), float(launch_coords[0][1])
             elif len(df_all) > 0:
@@ -2377,15 +2370,10 @@ def panel(title, product_names_list, is_left=True, competitor=None):
                 lat0, lon0 = 0.0, 0.0
 
             m = folium.Map(location=[lat0, lon0], zoom_start=11)
-            # FAA overlay (GeoJSON) on competitor map
-        if FAA_GEOJSON:
-            folium.GeoJson(
-                FAA_GEOJSON,
-                name="FAA Grid",
-                style_function=lambda feat: {"color": "#1f6feb", "weight": 1, "fillOpacity": 0},
-                highlight_function=lambda feat: {"weight": 2},
-                tooltip="FAA Grid",
-            ).add_to(m)
+
+            # FAA overlay on the competitor map
+            if FAA_GEOJSON:
+                folium.GeoJson(FAA_GEOJSON, name="FAA Grid", tooltip="FAA Grid").add_to(m)
 
             # Red competitor circles
             comp_r_m = comp_range_mi * 1609.34
@@ -2397,11 +2385,15 @@ def panel(title, product_names_list, is_left=True, competitor=None):
             for la, lo in launch_coords:
                 folium.Circle(location=(la, lo), radius=our_eff_range * 1609.34, color="blue", weight=2, fill=False, opacity=0.35).add_to(m)
 
-            # Optional outline of placement polygon
+            # City-limits outline (purple)
             outline_latlon = polygon_outline_latlon(PLACEMENT_POLY_UTM, inv_calls)
             if outline_latlon:
                 folium.PolyLine(locations=[(lt, ln) for lt, ln in outline_latlon],
                                 color="purple", weight=4, opacity=0.8).add_to(m)
+
+            # Layer control only if we added FAA layer
+            if FAA_GEOJSON:
+                folium.LayerControl(collapsed=True).add_to(m)
 
             st_folium(m, width=800, height=500, key=f"cmp_map_R_{competitor}")
 
@@ -2417,6 +2409,9 @@ def panel(title, product_names_list, is_left=True, competitor=None):
                 f"Per-location area: {plan['per_location_area_sqmi']:.2f} sq mi • "
                 f"Radius: {comp_range_mi:.2f} mi"
             )
+
+        # (Your existing specs rendering code stays as-is below)
+        ...
 
         # Specs (unchanged)
         def render_specs(pname: str):
