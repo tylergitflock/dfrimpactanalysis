@@ -2132,6 +2132,33 @@ def polygon_outline_latlon(poly_utm, inv: Transformer):
     lat, lon = _unproject_points(inv, np.asarray(xs), np.asarray(ys))
     return list(zip(lat.tolist(), lon.tolist()))
 
+# ---------- Unified target/placement logic for competitor sizing ----------
+def compute_competition_target(city_area_sqmi: float,
+                               our_sqmi: float,
+                               calls_poly_utm,
+                               our_poly_utm):
+    """
+    Returns (TARGET_AREA_SQMI, PLACEMENT_POLY_UTM, mode_str)
+
+    Case A (city <= our): target = city area; place inside city polygon (calls_poly if present)
+    Case B (city  > our): target = our area;   place inside our coverage polygon
+    """
+    city_area_sqmi = float(city_area_sqmi or 0.0)
+    our_sqmi       = float(our_sqmi or 0.0)
+
+    if city_area_sqmi > 0 and (our_sqmi <= 0 or city_area_sqmi <= our_sqmi):
+        # Case A
+        target_area = city_area_sqmi
+        placement   = calls_poly_utm or our_poly_utm
+        mode        = "CITY"
+    else:
+        # Case B (includes: city missing/zero → fall back to our coverage)
+        target_area = our_sqmi if our_sqmi > 0 else city_area_sqmi
+        placement   = our_poly_utm or calls_poly_utm
+        mode        = "OUR"
+
+    return float(target_area), placement, mode
+
 # ---------------- Hardcoded specs/prices/ranges (from your CSV) --------------
 PLATFORMS = {
     "Flock Aerodome M350": {
@@ -2320,11 +2347,7 @@ our_poly_utm, OUR_CIRCLES_AREA_SQMI = union_launch_circles_utm(
     launch_coords, our_eff_range, fwd_calls
 )
 
-# Constrain comparison placement to OUR coverage (union of our circles)
-PLACEMENT_POLY_UTM = our_poly_utm
-
 # ---------- City area comes from CSV (no guessing) ----------
-# You already pushed CSV meta into session; prefer that.
 city_area_csv = st.session_state.get("city_area_sqmi") or _meta_sqmi
 if city_area_csv is not None:
     try:
@@ -2332,14 +2355,13 @@ if city_area_csv is not None:
     except Exception:
         city_area_csv = None
 
-# Fallbacks if CSV missing
-if city_area_csv is None or city_area_csv <= 0:
-    # last resort: calls hull area, else our coverage estimate
-    city_area_csv = (CALLS_AREA_SQMI if (CALLS_AREA_SQMI and CALLS_AREA_SQMI > 0) else OUR_AREA_SQMI_EST)
-
-# ---------- FIRST COMPARISON RULE ----------
-# Use the smaller of (CSV city area, our actual coverage area)
-TARGET_AREA_SQMI = float(min(city_area_csv, OUR_CIRCLES_AREA_SQMI if OUR_CIRCLES_AREA_SQMI else city_area_csv))
+# Unified sizing/placement (applies to both Comparison & Full City logic)
+TARGET_AREA_SQMI, PLACEMENT_POLY_UTM, _cmp_mode = compute_competition_target(
+    city_area_sqmi=(city_area_csv if city_area_csv and city_area_csv > 0 else CALLS_AREA_SQMI),
+    our_sqmi=OUR_CIRCLES_AREA_SQMI,
+    calls_poly_utm=calls_poly_utm,
+    our_poly_utm=our_poly_utm
+)
 
 # ---------------- Aerodome yearly pricing (no discount UI in Comparison) -----
 RADAR_PRICE = 150000
@@ -2411,46 +2433,62 @@ def place_sites_kmeans_in_polygon(lat, lon, polygon_utm, n_sites, fwd: Transform
 # ---------------- Panel renderer (unchanged other than using TARGET_AREA_SQMI) ----------
 def panel(title, product_names_list, is_left=True, competitor=None):
     with st.container(border=True):
-        # Only render a header if there is one (prevents extra blank space)
+        # Keep a tight header — no captions/extra text to avoid white space
         if title:
             st.subheader(title)
 
         if is_left:
-            # LEFT: our heatmap + blue range circles + FAA overlay
+            # LEFT: our calls heat + blue coverage + FAA
             render_map(
-                df_all,                         # you can switch to dfr_only if desired
+                df_all,
                 heat=True,
                 heat_radius=8, heat_blur=12,
-                title="",                        # no extra title to avoid spacing
+                title="",                    # no inner title → no extra gap
                 key=f"cmp_map_L_{title}",
                 show_circle=True,
                 launch_coords=launch_coords,
                 geojson_overlays=[("FAA Grid", FAA_GEOJSON)] if FAA_GEOJSON else None,
             )
 
-            # Headline metrics for our (left) panel
+            # ✅ Always show Aerodome headline metrics on the left
+            _our_locs  = len(launch_rows)
+            _our_docks = int(pd.to_numeric(docks_col, errors="coerce").fillna(0).sum()) if docks_col is not None else 0
+            _our_cost  = our_base
             c1, c2, c3 = st.columns(3)
-            c1.metric("Required Locations", f"{launch_count:,}")
-            c2.metric("Total Docks", f"{total_docks:,}")
-            c3.metric("Yearly Cost", f"${our_base:,}")
-            
-            # Optional caption matching the right panel’s detail line
-            st.caption(
-                f"Docks/location: (from CSV) • "
-                f"Per-location area: {math.pi * (our_eff_range ** 2):.2f} sq mi • "
-                f"Radius: {our_eff_range:.2f} mi"
-            ) 
+            c1.metric("Required Locations", f"{_our_locs:,}")
+            c2.metric("Total Docks", f"{_our_docks:,}")
+            c3.metric("Yearly Cost", f"${_our_cost:,}")
+
+            # Specs block (unchanged)
+            def render_specs(pname: str):
+                specs = PLATFORMS[pname]["specs"]
+                for r in [
+                    "Pricing / Dock / Year (2-Year Contract)",
+                    "Number of Docks / Location",
+                    "Real-world Speed (MPH)",
+                    "Response Time (1 Mile) (sec)",
+                    "Real-world On-scene Time (min)",
+                    "Hit License Plate at 400ft Alt",
+                    "Effectively Fly at 400ft Alt",
+                    "Night Vision",
+                    "Integrations",
+                ]:
+                    if r in specs:
+                        st.write(f"**{r}**: {specs[r]}")
+
+            if is_multi:
+                st.markdown("**Detected Aerodome Platforms:** " + ", ".join(detected_types_list))
+                for p in detected_types_list:
+                    st.markdown(f"**{p}**")
+                    render_specs(p)
+                    st.markdown("---")
+            else:
+                if product_names_list:
+                    render_specs(product_names_list[0])
+
         else:
-            # RIGHT: competitor centers chosen inside polygon via K-Means on calls
-            plan = competitor_plan_constrained(
-                competitor,
-                polygon_utm=PLACEMENT_POLY_UTM,
-                fwd=fwd_calls if fwd_calls else _make_transformers(df_all["lat"].values, df_all["lon"].values)[0],
-                inv=inv_calls if inv_calls else _make_transformers(df_all["lat"].values, df_all["lon"].values)[1],
-                seed_pts_lat=df_all["lat"].values,
-                seed_pts_lon=df_all["lon"].values,
-                target_area_sqmi=float(TARGET_AREA_SQMI),
-            )
+            # RIGHT: competitor — use unified TARGET_AREA_SQMI + PLACEMENT_POLY_UTM
+            plan = competitor_plan(competitor, TARGET_AREA_SQMI)
             required_locs = plan["locations"]
             comp_range_mi = plan["range_mi"]
 
@@ -2472,7 +2510,7 @@ def panel(title, product_names_list, is_left=True, competitor=None):
 
             m = folium.Map(location=[lat0, lon0], zoom_start=11)
 
-            # FAA overlay on the competitor map
+            # FAA overlay
             if FAA_GEOJSON:
                 folium.GeoJson(FAA_GEOJSON, name="FAA Grid", tooltip="FAA Grid").add_to(m)
 
@@ -2486,13 +2524,12 @@ def panel(title, product_names_list, is_left=True, competitor=None):
             for la, lo in launch_coords:
                 folium.Circle(location=(la, lo), radius=our_eff_range * 1609.34, color="blue", weight=2, fill=False, opacity=0.35).add_to(m)
 
-            # City-limits outline (purple)
+            # Outline (purple) of whichever polygon is active
             outline_latlon = polygon_outline_latlon(PLACEMENT_POLY_UTM, inv_calls)
             if outline_latlon:
                 folium.PolyLine(locations=[(lt, ln) for lt, ln in outline_latlon],
                                 color="purple", weight=4, opacity=0.8).add_to(m)
 
-            # Layer control only if we added FAA layer
             if FAA_GEOJSON:
                 folium.LayerControl(collapsed=True).add_to(m)
 
@@ -2510,7 +2547,6 @@ def panel(title, product_names_list, is_left=True, competitor=None):
                 f"Per-location area: {plan['per_location_area_sqmi']:.2f} sq mi • "
                 f"Radius: {comp_range_mi:.2f} mi"
             )
-
         # Specs (unchanged)
         def render_specs(pname: str):
             specs = PLATFORMS[pname]["specs"]
@@ -2551,11 +2587,10 @@ with R:
     panel(comp_choice, [], is_left=False, competitor=comp_choice)
 
 
-# ─── Comparison — Full City (only if we don't already cover the city) ────────
+# ─── Comparison — Full City (same logic as normal) ───────────────────────────
 st.markdown("---")
 st.header("Comparison — Full City")
 
-# Sidebar uploader for the full-jurisdiction plan (headers start on row 1)
 st.sidebar.header("Launch Locations — Full Juris (optional)")
 full_juris_file = st.sidebar.file_uploader(
     "Upload Launch Locations - Full Juris CSV",
@@ -2566,157 +2601,155 @@ full_juris_file = st.sidebar.file_uploader(
 # Full city area to target = manual override if set, else call-derived hull
 FULL_CITY_AREA = float(st.session_state.get("city_area_sqmi") or 0.0) or float(CALLS_AREA_SQMI or 0.0)
 
-# Only show this section if our current plan doesn't cover the full city
-already_covers_city = (
-    np.isfinite(OUR_CIRCLES_AREA_SQMI)
-    and np.isfinite(FULL_CITY_AREA)
-    and OUR_CIRCLES_AREA_SQMI >= 0.99 * FULL_CITY_AREA
-)
-
-if already_covers_city:
-    st.info("Current Aerodome plan already covers the full city. Full-city comparison is hidden.")
+if not full_juris_file:
+    st.sidebar.info("Upload **Launch Locations – Full Juris** to show full-city comparison.")
 else:
-    if not full_juris_file:
-        st.sidebar.info("Upload **Launch Locations – Full Juris** to show full-city comparison.")
-    else:
-        # --- Parse the Full Juris CSV (headers on row 1; our loader already handles this) ---
-        try:
-            full_juris_file.seek(0)
-        except Exception:
-            pass
+    try:
+        full_juris_file.seek(0)
+    except Exception:
+        pass
 
-        fj_df, _, _ = _load_launch_locations_csv(full_juris_file)  # will fall back to row-1 headers
-        fj_df.columns = [c.strip() for c in fj_df.columns]
-        if "Location Name" not in fj_df.columns and "Locations" in fj_df.columns:
-            fj_df.rename(columns={"Locations": "Location Name"}, inplace=True)
-        if "Lon" not in fj_df.columns and "Long" in fj_df.columns:
-            fj_df.rename(columns={"Long": "Lon"}, inplace=True)
-        for col in ["Location Name", "Address", "Lat", "Lon", "Type"]:
-            if col not in fj_df.columns:
-                fj_df[col] = ""
+    fj_df, _, _ = _load_launch_locations_csv(full_juris_file)
+    fj_df.columns = [c.strip() for c in fj_df.columns]
+    if "Location Name" not in fj_df.columns and "Locations" in fj_df.columns:
+        fj_df.rename(columns={"Locations": "Location Name"}, inplace=True)
+    if "Lon" not in fj_df.columns and "Long" in fj_df.columns:
+        fj_df.rename(columns={"Long": "Lon"}, inplace=True)
+    for col in ["Location Name", "Address", "Lat", "Lon", "Type", "Dock Type", "Number of Docks", "Number of Radar"]:
+        if col not in fj_df.columns:
+            fj_df[col] = ""
 
-        # Only launch rows
-        _t = fj_df["Type"].astype(str).str.strip().str.lower()
-        fj_launch = fj_df.loc[_t.eq("launch location")].copy()
+    # Only launch rows
+    _t = fj_df["Type"].astype(str).str.strip().str.lower()
+    fj_launch = fj_df.loc[_t.eq("launch location")].copy()
 
-        # Coords & validation
-        fj_launch["Lat"] = pd.to_numeric(fj_launch["Lat"], errors="coerce")
-        fj_launch["Lon"] = pd.to_numeric(fj_launch["Lon"], errors="coerce")
-        launch_coords_full = [
-            (float(r["Lat"]), float(r["Lon"]))
-            for _, r in fj_launch[["Lat", "Lon"]].dropna().iterrows()
-        ]
-        if not launch_coords_full:
-            st.error("Full Juris CSV has no valid Lat/Lon for launch locations.")
-            st.stop()
+    # Geocode if only address present
+    fj_launch["Lat"] = pd.to_numeric(fj_launch["Lat"], errors="coerce")
+    fj_launch["Lon"] = pd.to_numeric(fj_launch["Lon"], errors="coerce")
+    need_geo = fj_launch["Address"].notna() & (fj_launch["Lat"].isna() | fj_launch["Lon"].isna())
+    for idx in fj_launch.loc[need_geo].index:
+        la, lo = lookup(normalize_address(fj_launch.at[idx, "Address"]))
+        fj_launch.at[idx, "Lat"] = la
+        fj_launch.at[idx, "Lon"] = lo
 
-        # Pricing columns (mirror Pricing section)
-        for col, default in [("Dock Type", ""), ("Number of Docks", 0), ("Number of Radar", 0)]:
-            if col not in fj_launch.columns:
-                fj_launch[col] = default
-        fj_launch["Dock Type"] = fj_launch["Dock Type"].astype(str).str.strip().str.upper()
-        fj_launch["Number of Docks"] = pd.to_numeric(fj_launch["Number of Docks"], errors="coerce").fillna(0).astype(int)
-        fj_launch["Number of Radar"] = pd.to_numeric(fj_launch["Number of Radar"], errors="coerce").fillna(0).astype(int)
+    # Validate coords
+    fj_launch = fj_launch.dropna(subset=["Lat","Lon"]).copy()
+    fj_launch["Lat"] = pd.to_numeric(fj_launch["Lat"], errors="coerce")
+    fj_launch["Lon"] = pd.to_numeric(fj_launch["Lon"], errors="coerce")
+    launch_coords_full = [
+        (float(r["Lat"]), float(r["Lon"]))
+        for _, r in fj_launch[["Lat","Lon"]].iterrows()
+        if np.isfinite(r["Lat"]) and np.isfinite(r["Lon"])
+    ]
+    if not launch_coords_full:
+        st.error("Full Juris CSV has no valid Lat/Lon for launch locations.")
+        st.stop()
 
-        def _dock_unit_price(dt):
-            return PRICE_PER_DOCK_BY_TYPE.get(str(dt).upper().strip(), 0)
+    # Pricing (mirror main)
+    fj_launch["Dock Type"]       = fj_launch["Dock Type"].astype(str).str.strip().str.upper()
+    fj_launch["Number of Docks"] = pd.to_numeric(fj_launch["Number of Docks"], errors="coerce").fillna(0).astype(int)
+    fj_launch["Number of Radar"] = pd.to_numeric(fj_launch["Number of Radar"], errors="coerce").fillna(0).astype(int)
 
-        fj_launch["Dock Unit Price"]   = fj_launch["Dock Type"].map(_dock_unit_price)
-        fj_launch["Dock Yearly Cost"]  = (fj_launch["Number of Docks"] * fj_launch["Dock Unit Price"]).astype(int)
-        fj_launch["Radar Yearly Cost"] = (fj_launch["Number of Radar"] * PRICE_PER_RADAR).astype(int)
-        our_full_base = int((fj_launch["Dock Yearly Cost"] + fj_launch["Radar Yearly Cost"]).sum())
+    def _dock_unit_price(dt): return PRICE_PER_DOCK_BY_TYPE.get(str(dt).upper().strip(), 0)
+    fj_launch["Dock Unit Price"]   = fj_launch["Dock Type"].map(_dock_unit_price)
+    fj_launch["Dock Yearly Cost"]  = (fj_launch["Number of Docks"] * fj_launch["Dock Unit Price"]).astype(int)
+    fj_launch["Radar Yearly Cost"] = (fj_launch["Number of Radar"] * PRICE_PER_RADAR).astype(int)
+    our_full_base = int((fj_launch["Dock Yearly Cost"] + fj_launch["Radar Yearly Cost"]).sum())
 
-        launch_count_full = int(len(fj_launch))
-        total_docks_full  = int(fj_launch["Number of Docks"].sum())
+    # Build our full-coverage polygon
+    our_full_poly_utm, OUR_FULL_CIRCLES_AREA_SQMI = union_launch_circles_utm(
+        launch_coords_full, our_eff_range, fwd_calls  # reuse transformer if available
+    )
 
-        # --- Helpers for this section (left/right panels) --------------------
-        def panel_full_left(title, coords, req_locs, docks, yearly_cost):
-            with st.container(border=True):
-                st.subheader(title)
-                render_map(
-                    df_all,  # heat = calls
-                    heat=True,
-                    heat_radius=8, heat_blur=12,
-                    key="cmp_full_left_map",
-                    show_circle=True,
-                    launch_coords=coords
-                )
-                c1, c2, c3 = st.columns(3)
-                c1.metric("Required Locations", f"{req_locs:,}")
-                c2.metric("Total Docks", f"{docks:,}")
-                c3.metric("Yearly Cost", f"${yearly_cost:,}")
+    # 🔁 Use the SAME unified logic here too
+    TARGET_FC_SQMI, PLACEMENT_FC_POLY_UTM, _fc_mode = compute_competition_target(
+        city_area_sqmi=float(FULL_CITY_AREA or 0.0),
+        our_sqmi=float(OUR_FULL_CIRCLES_AREA_SQMI or 0.0),
+        calls_poly_utm=calls_poly_utm,
+        our_poly_utm=our_full_poly_utm
+    )
 
-        def panel_full_right(competitor, target_area_sqmi):
-            with st.container(border=True):
-                st.subheader(competitor)
-
-                # Size to full city area (ignore our coverage)
-                plan = competitor_plan(competitor, target_area_sqmi)
-                required_locs = plan["locations"]
-                comp_range_mi = plan["range_mi"]
-                docks_per_loc = PLATFORMS[competitor]["docks_per_location"]
-                yearly_cost   = plan["yearly_cost"]
-
-                # Place centers with KMeans on call points inside the CALLS polygon
-                if calls_poly_utm is None or fwd_calls is None or inv_calls is None:
-                    st.error("Not enough call data to derive city limits for placement.")
-                    return
-
-                centers = place_sites_kmeans_in_polygon(
-                    df_all["lat"].values, df_all["lon"].values,
-                    calls_poly_utm, n_sites=required_locs,
-                    fwd=fwd_calls, inv=inv_calls
-                )
-
-                # Map
-                if launch_coords:
-                    lat0, lon0 = float(launch_coords[0][0]), float(launch_coords[0][1])
-                elif len(df_all):
-                    lat0, lon0 = float(df_all["lat"].mean()), float(df_all["lon"].mean())
-                else:
-                    lat0, lon0 = 0.0, 0.0
-
-                m = folium.Map(location=[lat0, lon0], zoom_start=11)
-                comp_r_m = comp_range_mi * 1609.34
-                for (la, lo) in centers:
-                    folium.Circle(location=(la, lo), radius=comp_r_m, color="red", weight=3, fill=False).add_to(m)
-                    folium.CircleMarker(location=(la, lo), radius=3, color="red", fill=True).add_to(m)
-
-                # City outline (purple) from calls polygon
-                outline_latlon = polygon_outline_latlon(calls_poly_utm, inv_calls)
-                if outline_latlon:
-                    folium.PolyLine(
-                        locations=[(lt, ln) for lt, ln in outline_latlon],
-                        color="purple", weight=4, opacity=0.8
-                    ).add_to(m)
-
-                st_folium(m, width=800, height=500, key="cmp_full_right_map")
-
-                # Metrics
-                total_comp_docks = required_locs * docks_per_loc
-                c1, c2, c3 = st.columns(3)
-                c1.metric("Required Locations", f"{required_locs:,}")
-                c2.metric("Total Docks", f"{total_comp_docks:,}")
-                c3.metric("Yearly Cost", f"${yearly_cost:,}")
-                st.caption(
-                    f"Docks/location: {docks_per_loc} • "
-                    f"Per-location area: {plan['per_location_area_sqmi']:.2f} sq mi • "
-                    f"Radius: {comp_range_mi:.2f} mi"
-                )
-
-        # --- Render the two panels for Full City --------------------------------
-        FC_L, FC_R = st.columns(2)
-        with FC_L:
-            panel_full_left(
-                title="Flock Aerodome — Full City",
-                coords=launch_coords_full,
-                req_locs=launch_count_full,
-                docks=total_docks_full,
-                yearly_cost=our_full_base
+    # Panels
+    def panel_full_left(title, coords, docks, yearly_cost):
+        with st.container(border=True):
+            st.subheader(title)
+            render_map(
+                df_all,  # heat = calls
+                heat=True,
+                heat_radius=8, heat_blur=12,
+                key="cmp_full_left_map",
+                show_circle=True,
+                launch_coords=coords,
+                geojson_overlays=[("FAA Grid", FAA_GEOJSON)] if FAA_GEOJSON else None,
             )
-        with FC_R:
-            comp_choice_fc = st.selectbox(
-                "Compare against (Full City)",
-                COMPETITOR_OPTIONS, index=0, key="cmp_choice_fullcity"
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Required Locations", f"{len(coords):,}")
+            c2.metric("Total Docks", f"{int(docks):,}")
+            c3.metric("Yearly Cost", f"${int(yearly_cost):,}")
+
+    def panel_full_right(competitor):
+        with st.container(border=True):
+            st.subheader(competitor)
+            plan = competitor_plan(competitor, TARGET_FC_SQMI)
+            required_locs = plan["locations"]
+            comp_range_mi = plan["range_mi"]
+            docks_per_loc = PLATFORMS[competitor]["docks_per_location"]
+            yearly_cost   = plan["yearly_cost"]
+
+            if (PLACEMENT_FC_POLY_UTM is None) or (fwd_calls is None) or (inv_calls is None):
+                st.error("Not enough geometry to place competitor sites.")
+                return
+
+            centers = place_sites_kmeans_in_polygon(
+                df_all["lat"].values, df_all["lon"].values,
+                PLACEMENT_FC_POLY_UTM, n_sites=required_locs,
+                fwd=fwd_calls, inv=inv_calls
             )
-            panel_full_right(competitor=comp_choice_fc, target_area_sqmi=float(FULL_CITY_AREA or 0.0))
+
+            if launch_coords_full:
+                lat0, lon0 = float(launch_coords_full[0][0]), float(launch_coords_full[0][1])
+            elif len(df_all):
+                lat0, lon0 = float(df_all["lat"].mean()), float(df_all["lon"].mean())
+            else:
+                lat0, lon0 = 0.0, 0.0
+
+            m = folium.Map(location=[lat0, lon0], zoom_start=11)
+            comp_r_m = comp_range_mi * 1609.34
+            for (la, lo) in centers:
+                folium.Circle(location=(la, lo), radius=comp_r_m, color="red", weight=3, fill=False).add_to(m)
+                folium.CircleMarker(location=(la, lo), radius=3, color="red", fill=True).add_to(m)
+
+            outline_latlon = polygon_outline_latlon(PLACEMENT_FC_POLY_UTM, inv_calls)
+            if outline_latlon:
+                folium.PolyLine(
+                    locations=[(lt, ln) for lt, ln in outline_latlon],
+                    color="purple", weight=4, opacity=0.8
+                ).add_to(m)
+
+            st_folium(m, width=800, height=500, key="cmp_full_right_map")
+
+            total_comp_docks = required_locs * docks_per_loc
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Required Locations", f"{required_locs:,}")
+            c2.metric("Total Docks", f"{total_comp_docks:,}")
+            c3.metric("Yearly Cost", f"${yearly_cost:,}")
+            st.caption(
+                f"Docks/location: {docks_per_loc} • "
+                f"Per-location area: {plan['per_location_area_sqmi']:.2f} sq mi • "
+                f"Radius: {comp_range_mi:.2f} mi"
+            )
+
+    FC_L, FC_R = st.columns(2)
+    with FC_L:
+        panel_full_left(
+            title="Flock Aerodome — Full City",
+            coords=launch_coords_full,
+            docks=int(fj_launch["Number of Docks"].sum()),
+            yearly_cost=our_full_base
+        )
+    with FC_R:
+        comp_choice_fc = st.selectbox(
+            "Compare against (Full City)",
+            COMPETITOR_OPTIONS, index=0, key="cmp_choice_fullcity"
+        )
+        panel_full_right(competitor=comp_choice_fc)
