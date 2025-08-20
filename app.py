@@ -2218,9 +2218,6 @@ PLACEMENT_POLY_UTM = calls_poly_utm or our_poly_utm
 # Scalar target area for competitor count = EFFECTIVE city area (no re-assignment later)
 TARGET_AREA_SQMI = EFFECTIVE_CITY_AREA or OUR_AREA_SQMI_EST
 
-target_label = f"Target area (city limits used for math): {TARGET_AREA_SQMI:.2f} sq mi"
-st.caption(target_label)
-
 # ---------------- Aerodome yearly pricing (no discount UI in Comparison) -----
 RADAR_PRICE = 150000
 
@@ -2407,9 +2404,6 @@ def panel(title, product_names_list, is_left=True, competitor=None):
 
 # ---- Controls row + two panels ---------------------------------------------
 topL, topR = st.columns([3, 2])
-with topL:
-    # show the single target label once (not twice)
-    st.caption(target_label)
 with topR:
     comp_choice = st.selectbox("Compare against", COMPETITOR_OPTIONS, index=0, key="cmp_choice")
 
