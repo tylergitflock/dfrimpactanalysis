@@ -16,6 +16,48 @@ from folium.plugins import HeatMap
 import math
 import zipfile, re
 
+# --- FAA ESRI overlay (hardcoded) -------------------------------------------
+import requests  # add if not already imported
+
+FAA_LAYER_URL = "https://services6.arcgis.com/ssFJjBXIUyZDrSYZ/arcgis/rest/services/FAA_UAS_FacilityMap_Data/FeatureServer/0"
+
+def _data_bbox(lat_series, lon_series, pad=0.05):
+    """Return (xmin, ymin, xmax, ymax) in lon/lat with padding."""
+    lat = pd.to_numeric(pd.Series(lat_series), errors="coerce").dropna()
+    lon = pd.to_numeric(pd.Series(lon_series), errors="coerce").dropna()
+    if lat.empty or lon.empty:
+        return None
+    return (
+        float(lon.min() - pad),
+        float(lat.min() - pad),
+        float(lon.max() + pad),
+        float(lat.max() + pad),
+    )
+
+def load_esri_geojson(layer_url: str, bbox=None, out_sr=4326):
+    """Query an ArcGIS FeatureServer layer and return GeoJSON (as a dict)."""
+    query_url = layer_url.rstrip("/") + "/query"
+    params = {
+        "f": "geojson",
+        "where": "1=1",
+        "outFields": "*",
+        "outSR": out_sr,
+    }
+    if bbox:
+        xmin, ymin, xmax, ymax = bbox
+        params.update({
+            "geometry": json.dumps({
+                "xmin": xmin, "ymin": ymin, "xmax": xmax, "ymax": ymax,
+                "spatialReference": {"wkid": 4326}
+            }),
+            "geometryType": "esriGeometryEnvelope",
+            "spatialRel": "esriSpatialRelIntersects",
+            "inSR": 4326,
+        })
+    r = requests.get(query_url, params=params, timeout=20)
+    r.raise_for_status()
+    return r.json()
+
 # ─── Page Setup (must be first Streamlit call) ───────────────────────────────
 st.set_page_config(page_title="DFR Impact Analysis", layout="wide")
 
@@ -1488,7 +1530,7 @@ else:
 def render_map(
     df_pts,
     heat=False,
-    title=None,
+    title="",
     key=None,
     heat_radius=15,
     heat_blur=25,
@@ -1496,12 +1538,11 @@ def render_map(
     launch_coords=None,
     hotspot_center=None,
     hotspot_radius=None,
+    geojson_overlays=None,          # ← NEW
 ):
-    
-    if title:
-        st.subheader(title)
+    st.subheader(title)
 
-    # drop any NaNs so folium never errors
+    # drop NaNs so folium never errors
     if {"lat","lon"}.issubset(df_pts.columns):
         df_pts = df_pts.dropna(subset=["lat","lon"])
 
@@ -1515,7 +1556,19 @@ def render_map(
 
     m = folium.Map(location=center, zoom_start=10)
 
-    # blue 3.5 mi drone-range circle
+    # --- FAA / other overlays (GeoJSON) ---
+    if geojson_overlays:
+        for _name, _gj in geojson_overlays:
+            if _gj:
+                folium.GeoJson(
+                    _gj,
+                    name=_name,
+                    style_function=lambda feat: {"color": "#1f6feb", "weight": 1, "fillOpacity": 0},
+                    highlight_function=lambda feat: {"weight": 2},
+                    tooltip=_name,
+                ).add_to(m)
+
+    # blue drone-range circle(s)
     if show_circle and launch_coords:
         for la, lo in launch_coords:
             folium.Circle(
@@ -1525,7 +1578,7 @@ def render_map(
                 fill=False
             ).add_to(m)
 
-    # red 0.5 mi hotspot circle
+    # red hotspot circle
     if hotspot_center and hotspot_radius:
         folium.Circle(
             location=hotspot_center,
@@ -1535,19 +1588,14 @@ def render_map(
             fill=False
         ).add_to(m)
 
-    # heat or points
+    # heat vs points
     if heat and not df_pts.empty:
-        # if you've passed in a 'count' column, use it as intensity
-        if "count" in df_pts.columns:
-            data = df_pts[["lat", "lon", "count"]].values.tolist()
-        else:
-            data = df_pts[["lat", "lon"]].values.tolist()
-
-        HeatMap(
-            data,
-            radius=heat_radius,
-            blur=heat_blur
-        ).add_to(m)
+        data = (
+            df_pts[["lat","lon","count"]].values.tolist()
+            if "count" in df_pts.columns
+            else df_pts[["lat","lon"]].values.tolist()
+        )
+        HeatMap(data, radius=heat_radius, blur=heat_blur).add_to(m)
     else:
         for _, r in df_pts.iterrows():
             folium.CircleMarker(
@@ -1592,7 +1640,8 @@ render_map(
     title="",
     key="map_range_circle",
     show_circle=True,
-    launch_coords=launch_coords
+    launch_coords=launch_coords,
+    geojson_overlays=[("FAA Grid", FAA_GEOJSON)],   # ← FAA overlay here only
 )
 metrics_under(
     "Range — key stats",
@@ -1794,6 +1843,21 @@ render_map(
     show_circle=True,
     launch_coords=launch_coords
 )
+
+# ==== FAA overlay data (load once per run) ===================================
+_lats = list(df_all["lat"].dropna().astype(float).values)
+_lons = list(df_all["lon"].dropna().astype(float).values)
+for la, lo in launch_coords:
+    _lats.append(float(la))
+    _lons.append(float(lo))
+
+FAA_GEOJSON = None
+faa_bbox = _data_bbox(_lats, _lons, pad=0.05)
+try:
+    FAA_GEOJSON = load_esri_geojson(FAA_LAYER_URL, bbox=faa_bbox)
+except Exception as _e:
+    FAA_GEOJSON = None
+    st.sidebar.warning(f"FAA layer failed to load: {_e}")
 
 # --- Summary row ---
 def _fmt_usd(x): return f"${x:,.0f}"
@@ -2272,12 +2336,14 @@ def panel(title, product_names_list, is_left=True, competitor=None):
         if is_left:
             # Left = our heat + blue range circles from actual launch sites
             render_map(
-                df_all,
+                df_all,                         # (or all_dfr if you prefer)
                 heat=True,
                 heat_radius=8, heat_blur=12,
+                title="",
                 key=f"cmp_map_L_{title}",
                 show_circle=True,
-                launch_coords=launch_coords
+                launch_coords=launch_coords,
+                geojson_overlays=[("FAA Grid", FAA_GEOJSON)],   # ← FAA on left map
             )
         
             # ← ADD THESE THREE METRICS (mirror the competitor side)
@@ -2311,6 +2377,15 @@ def panel(title, product_names_list, is_left=True, competitor=None):
                 lat0, lon0 = 0.0, 0.0
 
             m = folium.Map(location=[lat0, lon0], zoom_start=11)
+            # FAA overlay (GeoJSON) on competitor map
+        if FAA_GEOJSON:
+            folium.GeoJson(
+                FAA_GEOJSON,
+                name="FAA Grid",
+                style_function=lambda feat: {"color": "#1f6feb", "weight": 1, "fillOpacity": 0},
+                highlight_function=lambda feat: {"weight": 2},
+                tooltip="FAA Grid",
+            ).add_to(m)
 
             # Red competitor circles
             comp_r_m = comp_range_mi * 1609.34
