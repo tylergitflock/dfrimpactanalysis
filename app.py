@@ -2306,7 +2306,7 @@ def panel(title, product_names_list, is_left=True, competitor=None):
         if is_left:
             # LEFT: our heatmap + blue range circles
             render_map(
-                df_all,                         # ← if you prefer only DFR calls, change to dfr_only
+                df_all,                         # or dfr_only if you prefer
                 heat=True,
                 heat_radius=8, heat_blur=12,
                 title="",
@@ -2314,6 +2314,19 @@ def panel(title, product_names_list, is_left=True, competitor=None):
                 show_circle=True,
                 launch_coords=launch_coords
             )
+
+            # 🟦 Aerodome headline metrics (reuse Pricing variables)
+            yearly_cost_display = discounted_total if discount_pct > 0 else list_total
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Required Locations", f"{total_launch_sites:,}")
+            c2.metric("Total Docks", f"{total_docks:,}")
+            c3.metric("Yearly Cost", _fmt_usd(yearly_cost_display))
+            if discount_pct > 0:
+                st.caption(
+                    f"List: {_fmt_usd(list_total)} • "
+                    f"Discount: {int(discount_pct)}% → {_fmt_usd(discounted_total)}"
+                )
+
         else:
             # RIGHT: competitor centers chosen inside polygon via K-Means on calls
             plan = competitor_plan(competitor, TARGET_AREA_SQMI)
@@ -2355,7 +2368,7 @@ def panel(title, product_names_list, is_left=True, competitor=None):
 
             st_folium(m, width=800, height=500, key=f"cmp_map_R_{competitor}")
 
-            # Headline metrics
+            # 🔴 Competitor headline metrics (unchanged)
             comp_docks_per_loc = PLATFORMS[competitor]["docks_per_location"]
             total_comp_docks = required_locs * comp_docks_per_loc
             c1, c2, c3 = st.columns(3)
@@ -2368,7 +2381,7 @@ def panel(title, product_names_list, is_left=True, competitor=None):
                 f"Radius: {comp_range_mi:.2f} mi"
             )
 
-        # Specs list
+        # Specs list (unchanged)
         def render_specs(pname: str):
             specs = PLATFORMS[pname]["specs"]
             rows = [
