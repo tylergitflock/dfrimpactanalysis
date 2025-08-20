@@ -2041,6 +2041,86 @@ def union_launch_circles_utm(launch_latlon, radius_mi, fwd: Transformer | None):
         return None, 0.0
     return poly, float(poly.area / SQM_PER_SQMI)
 
+def _circle_union_area_sqmi_inside(polygon_utm, centers_latlon, radius_mi, fwd: Transformer) -> float:
+    if polygon_utm is None or not centers_latlon:
+        return 0.0
+    r_m = float(radius_mi) * 1609.34
+    lats = np.array([la for la, _ in centers_latlon], dtype=float)
+    lons = np.array([lo for _, lo in centers_latlon], dtype=float)
+    xs, ys = _project_points(fwd, lats, lons)
+    circles = [Point(float(x), float(y)).buffer(r_m) for x, y in zip(xs, ys)]
+    u = None
+    for c in circles:
+        u = c if u is None else u.union(c)
+    if u is None or u.is_empty:
+        return 0.0
+    covered = u.intersection(polygon_utm)
+    if covered.is_empty:
+        return 0.0
+    return float(covered.area / SQM_PER_SQMI)
+
+def competitor_plan_constrained(comp_name: str, polygon_utm, fwd: Transformer, inv: Transformer,
+                                seed_pts_lat, seed_pts_lon, target_area_sqmi: float, max_iter: int = 8):
+    cfg = PLATFORMS[comp_name]
+    per_loc_area = math.pi * (cfg["range_mi"] ** 2)
+    EFF = 0.88  # packing efficiency guess
+    guess = max(1, int(math.ceil((target_area_sqmi / per_loc_area) / EFF)))
+
+    lat = pd.to_numeric(pd.Series(seed_pts_lat), errors="coerce")
+    lon = pd.to_numeric(pd.Series(seed_pts_lon), errors="coerce")
+    mask = lat.notna() & lon.notna()
+    if not mask.any() or polygon_utm is None:
+        n = guess
+        return {
+            "locations": n,
+            "yearly_cost": n * cfg["docks_per_location"] * cfg["price_per_dock"],
+            "per_location_area_sqmi": per_loc_area,
+            "docks_per_location": cfg["docks_per_location"],
+            "range_mi": cfg["range_mi"],
+        }
+
+    X, Y = _project_points(fwd, lat[mask].values, lon[mask].values)
+    pts_in = [(x, y) for x, y in zip(X, Y) if polygon_utm.contains(Point(float(x), float(y)))]
+    if not pts_in:
+        n = guess
+        return {
+            "locations": n,
+            "yearly_cost": n * cfg["docks_per_location"] * cfg["price_per_dock"],
+            "per_location_area_sqmi": per_loc_area,
+            "docks_per_location": cfg["docks_per_location"],
+            "range_mi": cfg["range_mi"],
+        }
+    XY = np.asarray(pts_in, dtype=float)
+
+    n = guess
+    goal = float(target_area_sqmi)
+    for _ in range(max_iter):
+        n = max(1, n)
+        km = KMeans(n_clusters=min(n, len(XY)), n_init=10, random_state=42).fit(XY)
+        cx, cy = km.cluster_centers_[:, 0], km.cluster_centers_[:, 1]
+        lat_c, lon_c = _unproject_points(inv, cx, cy)
+        covered = _circle_union_area_sqmi_inside(polygon_utm, list(zip(lat_c, lon_c)), cfg["range_mi"], fwd)
+
+        if covered >= goal and n > 1:
+            n -= 1
+            continue
+        if covered < goal:
+            n += 1
+            if n > guess * 3:
+                break
+            continue
+        break
+
+    n = max(1, n)
+    yearly_cost = n * cfg["docks_per_location"] * cfg["price_per_dock"]
+    return {
+        "locations": n,
+        "yearly_cost": yearly_cost,
+        "per_location_area_sqmi": per_loc_area,
+        "docks_per_location": cfg["docks_per_location"],
+        "range_mi": cfg["range_mi"],
+    }
+
 # ---------- Outline conversion for folium ----------
 
 def polygon_outline_latlon(poly_utm, inv: Transformer):
@@ -2240,8 +2320,8 @@ our_poly_utm, OUR_CIRCLES_AREA_SQMI = union_launch_circles_utm(
     launch_coords, our_eff_range, fwd_calls
 )
 
-# Placement polygon = calls hull if present (nicer visual), else our union
-PLACEMENT_POLY_UTM = calls_poly_utm or our_poly_utm
+# Constrain comparison placement to OUR coverage (union of our circles)
+PLACEMENT_POLY_UTM = our_poly_utm
 
 # ---------- City area comes from CSV (no guessing) ----------
 # You already pushed CSV meta into session; prefer that.
@@ -2349,7 +2429,15 @@ def panel(title, product_names_list, is_left=True, competitor=None):
             )
         else:
             # RIGHT: competitor centers chosen inside polygon via K-Means on calls
-            plan = competitor_plan(competitor, TARGET_AREA_SQMI)
+            plan = competitor_plan_constrained(
+                competitor,
+                polygon_utm=PLACEMENT_POLY_UTM,
+                fwd=fwd_calls if fwd_calls else _make_transformers(df_all["lat"].values, df_all["lon"].values)[0],
+                inv=inv_calls if inv_calls else _make_transformers(df_all["lat"].values, df_all["lon"].values)[1],
+                seed_pts_lat=df_all["lat"].values,
+                seed_pts_lon=df_all["lon"].values,
+                target_area_sqmi=float(TARGET_AREA_SQMI),
+            )
             required_locs = plan["locations"]
             comp_range_mi = plan["range_mi"]
 
