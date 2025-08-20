@@ -2381,3 +2381,174 @@ with L:
     panel(aerodome_title, detected_types_list if is_multi else detected_types_list[:1], is_left=True)
 with R:
     panel(comp_choice, [], is_left=False, competitor=comp_choice)
+
+
+# ─── Comparison — Full City (only if we don't already cover the city) ────────
+st.markdown("---")
+st.header("Comparison — Full City")
+
+# Sidebar uploader for the full-jurisdiction plan (headers start on row 1)
+st.sidebar.header("Launch Locations — Full Juris (optional)")
+full_juris_file = st.sidebar.file_uploader(
+    "Upload Launch Locations - Full Juris CSV",
+    type=["csv"],
+    key="launch_csv_full_juris"
+)
+
+# Full city area to target = manual override if set, else call-derived hull
+FULL_CITY_AREA = float(st.session_state.get("city_area_sqmi") or 0.0) or float(CALLS_AREA_SQMI or 0.0)
+
+# Only show this section if our current plan doesn't cover the full city
+already_covers_city = (
+    np.isfinite(OUR_CIRCLES_AREA_SQMI)
+    and np.isfinite(FULL_CITY_AREA)
+    and OUR_CIRCLES_AREA_SQMI >= 0.99 * FULL_CITY_AREA
+)
+
+if already_covers_city:
+    st.info("Current Aerodome plan already covers the full city. Full-city comparison is hidden.")
+else:
+    if not full_juris_file:
+        st.sidebar.info("Upload **Launch Locations – Full Juris** to show full-city comparison.")
+    else:
+        # --- Parse the Full Juris CSV (headers on row 1; our loader already handles this) ---
+        try:
+            full_juris_file.seek(0)
+        except Exception:
+            pass
+
+        fj_df, _, _ = _load_launch_locations_csv(full_juris_file)  # will fall back to row-1 headers
+        fj_df.columns = [c.strip() for c in fj_df.columns]
+        if "Location Name" not in fj_df.columns and "Locations" in fj_df.columns:
+            fj_df.rename(columns={"Locations": "Location Name"}, inplace=True)
+        if "Lon" not in fj_df.columns and "Long" in fj_df.columns:
+            fj_df.rename(columns={"Long": "Lon"}, inplace=True)
+        for col in ["Location Name", "Address", "Lat", "Lon", "Type"]:
+            if col not in fj_df.columns:
+                fj_df[col] = ""
+
+        # Only launch rows
+        _t = fj_df["Type"].astype(str).str.strip().str.lower()
+        fj_launch = fj_df.loc[_t.eq("launch location")].copy()
+
+        # Coords & validation
+        fj_launch["Lat"] = pd.to_numeric(fj_launch["Lat"], errors="coerce")
+        fj_launch["Lon"] = pd.to_numeric(fj_launch["Lon"], errors="coerce")
+        launch_coords_full = [
+            (float(r["Lat"]), float(r["Lon"]))
+            for _, r in fj_launch[["Lat", "Lon"]].dropna().iterrows()
+        ]
+        if not launch_coords_full:
+            st.error("Full Juris CSV has no valid Lat/Lon for launch locations.")
+            st.stop()
+
+        # Pricing columns (mirror Pricing section)
+        for col, default in [("Dock Type", ""), ("Number of Docks", 0), ("Number of Radar", 0)]:
+            if col not in fj_launch.columns:
+                fj_launch[col] = default
+        fj_launch["Dock Type"] = fj_launch["Dock Type"].astype(str).str.strip().str.upper()
+        fj_launch["Number of Docks"] = pd.to_numeric(fj_launch["Number of Docks"], errors="coerce").fillna(0).astype(int)
+        fj_launch["Number of Radar"] = pd.to_numeric(fj_launch["Number of Radar"], errors="coerce").fillna(0).astype(int)
+
+        def _dock_unit_price(dt):
+            return PRICE_PER_DOCK_BY_TYPE.get(str(dt).upper().strip(), 0)
+
+        fj_launch["Dock Unit Price"]   = fj_launch["Dock Type"].map(_dock_unit_price)
+        fj_launch["Dock Yearly Cost"]  = (fj_launch["Number of Docks"] * fj_launch["Dock Unit Price"]).astype(int)
+        fj_launch["Radar Yearly Cost"] = (fj_launch["Number of Radar"] * PRICE_PER_RADAR).astype(int)
+        our_full_base = int((fj_launch["Dock Yearly Cost"] + fj_launch["Radar Yearly Cost"]).sum())
+
+        launch_count_full = int(len(fj_launch))
+        total_docks_full  = int(fj_launch["Number of Docks"].sum())
+
+        # --- Helpers for this section (left/right panels) --------------------
+        def panel_full_left(title, coords, req_locs, docks, yearly_cost):
+            with st.container(border=True):
+                st.subheader(title)
+                render_map(
+                    df_all,  # heat = calls
+                    heat=True,
+                    heat_radius=8, heat_blur=12,
+                    key="cmp_full_left_map",
+                    show_circle=True,
+                    launch_coords=coords
+                )
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Required Locations", f"{req_locs:,}")
+                c2.metric("Total Docks", f"{docks:,}")
+                c3.metric("Yearly Cost", f"${yearly_cost:,}")
+
+        def panel_full_right(competitor, target_area_sqmi):
+            with st.container(border=True):
+                st.subheader(competitor)
+
+                # Size to full city area (ignore our coverage)
+                plan = competitor_plan(competitor, target_area_sqmi)
+                required_locs = plan["locations"]
+                comp_range_mi = plan["range_mi"]
+                docks_per_loc = PLATFORMS[competitor]["docks_per_location"]
+                yearly_cost   = plan["yearly_cost"]
+
+                # Place centers with KMeans on call points inside the CALLS polygon
+                if calls_poly_utm is None or fwd_calls is None or inv_calls is None:
+                    st.error("Not enough call data to derive city limits for placement.")
+                    return
+
+                centers = place_sites_kmeans_in_polygon(
+                    df_all["lat"].values, df_all["lon"].values,
+                    calls_poly_utm, n_sites=required_locs,
+                    fwd=fwd_calls, inv=inv_calls
+                )
+
+                # Map
+                if launch_coords:
+                    lat0, lon0 = float(launch_coords[0][0]), float(launch_coords[0][1])
+                elif len(df_all):
+                    lat0, lon0 = float(df_all["lat"].mean()), float(df_all["lon"].mean())
+                else:
+                    lat0, lon0 = 0.0, 0.0
+
+                m = folium.Map(location=[lat0, lon0], zoom_start=11)
+                comp_r_m = comp_range_mi * 1609.34
+                for (la, lo) in centers:
+                    folium.Circle(location=(la, lo), radius=comp_r_m, color="red", weight=3, fill=False).add_to(m)
+                    folium.CircleMarker(location=(la, lo), radius=3, color="red", fill=True).add_to(m)
+
+                # City outline (purple) from calls polygon
+                outline_latlon = polygon_outline_latlon(calls_poly_utm, inv_calls)
+                if outline_latlon:
+                    folium.PolyLine(
+                        locations=[(lt, ln) for lt, ln in outline_latlon],
+                        color="purple", weight=4, opacity=0.8
+                    ).add_to(m)
+
+                st_folium(m, width=800, height=500, key="cmp_full_right_map")
+
+                # Metrics
+                total_comp_docks = required_locs * docks_per_loc
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Required Locations", f"{required_locs:,}")
+                c2.metric("Total Docks", f"{total_comp_docks:,}")
+                c3.metric("Yearly Cost", f"${yearly_cost:,}")
+                st.caption(
+                    f"Docks/location: {docks_per_loc} • "
+                    f"Per-location area: {plan['per_location_area_sqmi']:.2f} sq mi • "
+                    f"Radius: {comp_range_mi:.2f} mi"
+                )
+
+        # --- Render the two panels for Full City --------------------------------
+        FC_L, FC_R = st.columns(2)
+        with FC_L:
+            panel_full_left(
+                title="Flock Aerodome — Full City",
+                coords=launch_coords_full,
+                req_locs=launch_count_full,
+                docks=total_docks_full,
+                yearly_cost=our_full_base
+            )
+        with FC_R:
+            comp_choice_fc = st.selectbox(
+                "Compare against (Full City)",
+                COMPETITOR_OPTIONS, index=0, key="cmp_choice_fullcity"
+            )
+            panel_full_right(competitor=comp_choice_fc, target_area_sqmi=float(FULL_CITY_AREA or 0.0))
