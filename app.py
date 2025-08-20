@@ -1787,12 +1787,12 @@ def _unproject_points(inv: Transformer, xs, ys):
 # ---------- City limits from call data (concave hull in meters) ----------
 def calls_concave_hull_utm(
     lat, lon, eps_m=None, min_samples=20,
-    alpha=None, buffer_smooth_m=300, simplify_m=100
+    alpha=None, buffer_smooth_m=150, simplify_m=60   # ← tighter defaults
 ):
     """
     Build a concave hull from call points in local UTM.
     Returns (poly_utm, area_sqmi, (fwd, inv)).
-    Robust to NaN/Inf during projection; short-circuits if too few points.
+    Robust to NaN/Inf, duplicates, and degenerate configs; falls back to convex hull.
     """
     # clean inputs
     lat = pd.to_numeric(pd.Series(lat), errors="coerce")
@@ -1807,7 +1807,7 @@ def calls_concave_hull_utm(
     # project to meters
     X, Y = _project_points(fwd, lat[mask].values, lon[mask].values)
 
-    # --- NEW: drop any non-finite projected points (prevents sklearn ValueError)
+    # drop any non-finite projected points
     finite = np.isfinite(X) & np.isfinite(Y)
     X, Y = X[finite], Y[finite]
     if len(X) < max(3, min_samples):
@@ -1815,49 +1815,60 @@ def calls_concave_hull_utm(
 
     XY = np.c_[X, Y]
 
+    # --- NEW: dedupe to avoid Delaunay failures on near-identical points
+    XY = np.unique(np.round(XY, 1), axis=0)  # 0.1 m grid; collapse dupes
+    if len(XY) < 3:
+        return None, 0.0, (fwd, inv)
+
     # DBSCAN outlier removal (keep largest cluster)
     if eps_m is None:
-        # auto eps ≈ median 1-NN distance (meters)
+        # auto eps ≈ median 1-NN distance; clamp to a sane band (50..400 m)
         from sklearn.neighbors import NearestNeighbors
         if len(XY) < 3:
             return None, 0.0, (fwd, inv)
         nn = NearestNeighbors(n_neighbors=2).fit(XY)
         dists, _ = nn.kneighbors(XY)
-        # dists[:,0] is zero (self); use first neighbor
-        med = float(np.median(dists[:, 1])) if np.isfinite(np.median(dists[:, 1])) else 50.0
-        eps = max(50.0, med)  # don’t go absurdly tiny
+        med = float(np.median(dists[:, 1]))
+        eps = float(np.clip(med if np.isfinite(med) and med > 0 else 50.0, 50.0, 400.0))
     else:
         eps = float(eps_m)
 
     labels = DBSCAN(eps=eps, min_samples=min_samples).fit_predict(XY)
-    if (labels >= 0).sum() > 0:
+    if (labels >= 0).any():
         labs, cnts = np.unique(labels[labels >= 0], return_counts=True)
-        keep_lab = labs[np.argmax(cnts)]
-        keep_mask = labels == keep_lab
+        XYk = XY[labels == labs[np.argmax(cnts)]]
     else:
-        keep_mask = np.ones(len(XY), dtype=bool)
+        XYk = XY
 
-    XYk = XY[keep_mask]
     if len(XYk) < 3:
         return None, 0.0, (fwd, inv)
 
     # alpha (concavity) — default from 1-NN again
     if alpha is None:
-        from sklearn.neighbors import NearestNeighbors
         nn2 = NearestNeighbors(n_neighbors=2).fit(XYk)
         d2, _ = nn2.kneighbors(XYk)
-        nn_med = float(np.median(d2[:, 1])) if np.isfinite(np.median(d2[:, 1])) and np.median(d2[:, 1]) > 0 else 50.0
+        nn_med = float(np.median(d2[:, 1]))
+        nn_med = nn_med if np.isfinite(nn_med) and nn_med > 0 else 50.0
         alpha = 1.0 / nn_med
 
-    # build polygon
-    pts = [Point(float(x), float(y)) for x, y in XYk]
-    poly = alphashape.alphashape(pts, alpha)
+    # build polygon, with safe fallback
+    try:
+        pts = [Point(float(x), float(y)) for x, y in XYk]
+        poly = alphashape.alphashape(pts, alpha)
+    except Exception:
+        poly = None
+
     if not poly or poly.is_empty:
-        return None, 0.0, (fwd, inv)
-    if poly.geom_type == "MultiPolygon":
+        # fallback: convex hull; if collinear, give it a tiny width
+        hull = MultiPoint([Point(float(x), float(y)) for x, y in XYk]).convex_hull
+        if getattr(hull, "geom_type", "") == "LineString":
+            hull = hull.buffer(25.0)  # meters
+        poly = hull
+
+    if getattr(poly, "geom_type", "") == "MultiPolygon":
         poly = max(poly.geoms, key=lambda p: p.area)
 
-    # smooth/simplify in meters
+    # smooth/simplify in meters (tighter than before to avoid over-inflating area)
     poly = poly.buffer(buffer_smooth_m).simplify(simplify_m).buffer(-buffer_smooth_m).buffer(0)
     if poly.is_empty:
         return None, 0.0, (fwd, inv)
