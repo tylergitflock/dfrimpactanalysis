@@ -2181,17 +2181,13 @@ our_poly_utm, OUR_CIRCLES_AREA_SQMI = union_launch_circles_utm(
 if calls_poly_utm is None:
     PLACEMENT_POLY_UTM = our_poly_utm
     TARGET_AREA_SQMI = OUR_CIRCLES_AREA_SQMI
-    target_label = f"Target area (our coverage fallback): {TARGET_AREA_SQMI:.2f} sq mi"
 else:
     if OUR_CIRCLES_AREA_SQMI < CALLS_AREA_SQMI:
         PLACEMENT_POLY_UTM = our_poly_utm
         TARGET_AREA_SQMI   = OUR_CIRCLES_AREA_SQMI
-        target_label = f"Target area (our coverage smaller): {TARGET_AREA_SQMI:.2f} sq mi"
     else:
         PLACEMENT_POLY_UTM = calls_poly_utm
         TARGET_AREA_SQMI   = CALLS_AREA_SQMI
-        target_label = f"Target area (call-derived city): {TARGET_AREA_SQMI:.2f} sq mi"
-st.caption(target_label)
 
 # ---------------- City limits default (sidebar overrides) --------------------
 CITY_AREA_SQMI_DEFAULT = float(CALLS_AREA_SQMI) if (CALLS_AREA_SQMI and CALLS_AREA_SQMI > 0) else None
