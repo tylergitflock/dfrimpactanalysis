@@ -2161,9 +2161,15 @@ else:
     target_label = f"Target area (our union-of-circles): {TARGET_AREA_SQMI:.2f} sq mi"
 st.caption(target_label)
 
-# ---------------- Pricing (our side) ----------------
+# ---------------- Aerodome yearly pricing (no discount UI in Comparison) -----
 RADAR_PRICE = 150000
-DOCK_PRICES = {"Dock 3": 50000, "Alpha": 125000, "Delta": 300000, "M350": 150000}
+
+DOCK_PRICES = {
+    "Dock 3": 50000,
+    "Alpha": 125000,
+    "Delta": 300000,
+    "M350": 150000,
+}
 
 def _dock_price_for_row(row):
     v = str(row.get(dock_type_col.name, "") if dock_type_col is not None else "").strip()
@@ -2171,22 +2177,17 @@ def _dock_price_for_row(row):
     v = (v or "Dock 3").strip()
     return DOCK_PRICES.get(v, DOCK_PRICES["Dock 3"])
 
-def compute_our_yearly_price(disc_fraction: float = 0.0):
+def compute_our_yearly_price_no_discount():
     if launch_rows.empty:
-        base = 0
-    else:
-        _rows = launch_rows.copy()
-        _rows["_docks"] = pd.to_numeric(docks_col, errors="coerce").fillna(0) if docks_col is not None else 0
-        _rows["_radars"] = pd.to_numeric(radars_col, errors="coerce").fillna(0) if radars_col is not None else 0
-        _rows["_dock_price"] = _rows.apply(_dock_price_for_row, axis=1)
-        base = int((_rows["_docks"] * _rows["_dock_price"]).sum() + _rows["_radars"].sum() * RADAR_PRICE)
-    disc_total = int(round(base * (1.0 - disc_fraction))) if disc_fraction > 0 else None
-    return disc_total, int(base)
+        return 0
+    _rows = launch_rows.copy()
+    _rows["_docks"] = pd.to_numeric(docks_col, errors="coerce").fillna(0) if docks_col is not None else 0
+    _rows["_radars"] = pd.to_numeric(radars_col, errors="coerce").fillna(0) if radars_col is not None else 0
+    _rows["_dock_price"] = _rows.apply(_dock_price_for_row, axis=1)
+    base = int((_rows["_docks"] * _rows["_dock_price"]).sum() + _rows["_radars"].sum() * RADAR_PRICE)
+    return int(base)
 
-disc_pct = st.number_input("Discount (%)", min_value=0, max_value=100, value=0, step=1,
-                           help="Applies to Aerodome yearly cost only.")
-disc_fraction = float(disc_pct) / 100.0
-our_discounted, our_base = compute_our_yearly_price(disc_fraction)
+our_base = compute_our_yearly_price_no_discount()
 
 # ---------------- Competitor math ----------------
 def circle_area_sqmi(radius_mi: float) -> float:
