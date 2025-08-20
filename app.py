@@ -1786,86 +1786,79 @@ def _unproject_points(inv: Transformer, xs, ys):
 
 # ---------- City limits from call data (concave hull in meters) ----------
 def calls_concave_hull_utm(
-    lat, lon,
-    eps_m=None,                 # auto if None
-    min_samples=20,
-    alpha=None,                 # auto if None
-    buffer_smooth_m=220,        # slightly smaller smoothing
-    simplify_m=60,              # less aggressive simplify
-    shrink_m=180                # final inward buffer to tighten boundary
+    lat, lon, eps_m=None, min_samples=20,
+    alpha=None, buffer_smooth_m=300, simplify_m=100
 ):
     """
-    Build a concave hull (alphashape) in local UTM from call points and return
-    (polygon_utm, area_sqmi, (fwd, inv)).
-
-    Heuristics aimed to avoid oversized polygons:
-      - DBSCAN eps auto-scales from data density (median NN distance)
-      - alpha uses a lower quantile (q=0.35) of NN distances
-      - final negative buffer (shrink_m) to pull in edges
+    Build a concave hull from call points in local UTM.
+    Returns (poly_utm, area_sqmi, (fwd, inv)).
+    Robust to NaN/Inf during projection; short-circuits if too few points.
     """
+    # clean inputs
     lat = pd.to_numeric(pd.Series(lat), errors="coerce")
     lon = pd.to_numeric(pd.Series(lon), errors="coerce")
     mask = lat.notna() & lon.notna()
     if mask.sum() < 10:
         return None, 0.0, (None, None)
 
+    # choose UTM from centroid of valid points
     fwd, inv = _make_transformers(lat[mask].values, lon[mask].values)
-    X, Y = _project_points(fwd, lat[mask].values, lon[mask].values)
-    XY = np.c_[X, Y]
 
-    # nearest-neighbor scale (meters)
-    from sklearn.neighbors import NearestNeighbors
-    nn = NearestNeighbors(n_neighbors=2).fit(XY)
-    dists, _ = nn.kneighbors(XY)
-    # dists[:,0] == 0 (self); use 1st neighbor
-    d1 = dists[:, 1]
-    d1 = d1[np.isfinite(d1)]
-    if len(d1) == 0:
+    # project to meters
+    X, Y = _project_points(fwd, lat[mask].values, lon[mask].values)
+
+    # --- NEW: drop any non-finite projected points (prevents sklearn ValueError)
+    finite = np.isfinite(X) & np.isfinite(Y)
+    X, Y = X[finite], Y[finite]
+    if len(X) < max(3, min_samples):
         return None, 0.0, (fwd, inv)
 
-    med = float(np.median(d1))
-    if not np.isfinite(med) or med <= 0:
-        med = 600.0  # fallback scale (m)
+    XY = np.c_[X, Y]
 
-    # ---- DBSCAN: auto eps if not provided
+    # DBSCAN outlier removal (keep largest cluster)
     if eps_m is None:
-        # 2.5× median NN, clamped to sensible range
-        eps_m = float(np.clip(2.5 * med, 500.0, 2500.0))
+        # auto eps ≈ median 1-NN distance (meters)
+        from sklearn.neighbors import NearestNeighbors
+        if len(XY) < 3:
+            return None, 0.0, (fwd, inv)
+        nn = NearestNeighbors(n_neighbors=2).fit(XY)
+        dists, _ = nn.kneighbors(XY)
+        # dists[:,0] is zero (self); use first neighbor
+        med = float(np.median(dists[:, 1])) if np.isfinite(np.median(dists[:, 1])) else 50.0
+        eps = max(50.0, med)  # don’t go absurdly tiny
+    else:
+        eps = float(eps_m)
 
-    labels = DBSCAN(eps=eps_m, min_samples=min_samples).fit_predict(XY)
-    # Keep largest non-noise cluster if any
-    keep_mask = np.ones(len(XY), dtype=bool)
-    if (labels >= 0).any():
+    labels = DBSCAN(eps=eps, min_samples=min_samples).fit_predict(XY)
+    if (labels >= 0).sum() > 0:
         labs, cnts = np.unique(labels[labels >= 0], return_counts=True)
         keep_lab = labs[np.argmax(cnts)]
         keep_mask = labels == keep_lab
+    else:
+        keep_mask = np.ones(len(XY), dtype=bool)
+
     XYk = XY[keep_mask]
     if len(XYk) < 3:
         return None, 0.0, (fwd, inv)
 
-    # ---- alpha: tighter quantile (q=0.35) for a smaller hull
+    # alpha (concavity) — default from 1-NN again
     if alpha is None:
+        from sklearn.neighbors import NearestNeighbors
         nn2 = NearestNeighbors(n_neighbors=2).fit(XYk)
         d2, _ = nn2.kneighbors(XYk)
-        dmin = d2[:, 1]
-        q = float(np.quantile(dmin[np.isfinite(dmin)], 0.35)) if np.isfinite(dmin).any() else 1.0
-        alpha = 1.0 / max(q, 1.0)
+        nn_med = float(np.median(d2[:, 1])) if np.isfinite(np.median(d2[:, 1])) and np.median(d2[:, 1]) > 0 else 50.0
+        alpha = 1.0 / nn_med
 
+    # build polygon
     pts = [Point(float(x), float(y)) for x, y in XYk]
     poly = alphashape.alphashape(pts, alpha)
-
     if not poly or poly.is_empty:
         return None, 0.0, (fwd, inv)
     if poly.geom_type == "MultiPolygon":
         poly = max(poly.geoms, key=lambda p: p.area)
 
-    # smooth a bit, then shrink inwards to counter overreach
-    poly = poly.buffer(buffer_smooth_m).simplify(simplify_m).buffer(-buffer_smooth_m)
-    if shrink_m and not poly.is_empty:
-        poly = poly.buffer(-shrink_m)
-
-    # clean up tiny artifacts
-    poly = poly.buffer(0)
+    # smooth/simplify in meters
+    poly = poly.buffer(buffer_smooth_m).simplify(simplify_m).buffer(-buffer_smooth_m).buffer(0)
     if poly.is_empty:
         return None, 0.0, (fwd, inv)
 
@@ -2087,7 +2080,8 @@ OUR_AREA_SQMI_EST = len(launch_coords) * math.pi * (our_eff_range ** 2)
 # Build polygons
 calls_poly_utm, CALLS_AREA_SQMI, (fwd_calls, inv_calls) = calls_concave_hull_utm(
     df_all["lat"].values, df_all["lon"].values,
-    eps_m=1500, min_samples=20
+    eps_m=None,  # auto
+    min_samples=20
 )
 our_poly_utm, OUR_CIRCLES_AREA_SQMI = union_launch_circles_utm(
     launch_coords, our_eff_range, fwd_calls
