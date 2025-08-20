@@ -2427,6 +2427,19 @@ def panel(title, product_names_list, is_left=True, competitor=None):
                 launch_coords=launch_coords,
                 geojson_overlays=[("FAA Grid", FAA_GEOJSON)] if FAA_GEOJSON else None,
             )
+
+            # Headline metrics for our (left) panel
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Required Locations", f"{launch_count:,}")
+            c2.metric("Total Docks", f"{total_docks:,}")
+            c3.metric("Yearly Cost", f"${our_base:,}")
+            
+            # Optional caption matching the right panel’s detail line
+            st.caption(
+                f"Docks/location: (from CSV) • "
+                f"Per-location area: {math.pi * (our_eff_range ** 2):.2f} sq mi • "
+                f"Radius: {our_eff_range:.2f} mi"
+            ) 
         else:
             # RIGHT: competitor centers chosen inside polygon via K-Means on calls
             plan = competitor_plan_constrained(
@@ -2497,9 +2510,6 @@ def panel(title, product_names_list, is_left=True, competitor=None):
                 f"Per-location area: {plan['per_location_area_sqmi']:.2f} sq mi • "
                 f"Radius: {comp_range_mi:.2f} mi"
             )
-
-        # (Your existing specs rendering code stays as-is below)
-        ...
 
         # Specs (unchanged)
         def render_specs(pname: str):
