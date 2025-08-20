@@ -519,8 +519,16 @@ if launch_file is not None:
         else "Using uploaded launch locations file."
     )
     # Load the CSV and pull metadata in one place
-    launch_df, _meta_agency, _meta_sqmi = _load_launch_locations_csv(launch_file)
-
+    def _load_launch_locations_csv(file):
+    # Read metadata only
+    meta_df = pd.read_csv(file, nrows=2, header=None)
+    agency   = str(meta_df.iat[0,1]).strip() if pd.notna(meta_df.iat[0,1]) else None
+    sqmi     = float(meta_df.iat[1,1]) if pd.notna(meta_df.iat[1,1]) else None
+    
+    # Reset pointer and read the actual launch data (skip 2 rows)
+    file.seek(0)
+    df = pd.read_csv(file, skiprows=2)
+    return df, agency, sqmi
     try:
         launch_file.seek(0)  # reset pointer just in case
     except Exception:
