@@ -2430,6 +2430,160 @@ def place_sites_kmeans_in_polygon(lat, lon, polygon_utm, n_sites, fwd: Transform
     lat_c, lon_c = _unproject_points(inv, cx, cy)
     return list(zip(lat_c.tolist(), lon_c.tolist()))
 
+# --- Coverage-driven placement (circle packing with relax) -------------------
+from shapely.geometry import Point
+import random
+
+def _poly_sample_grid(poly_utm, step_m: float) -> list[tuple[float,float]]:
+    """
+    Coarse grid over polygon bounds; keep points inside (UTM coords).
+    """
+    if poly_utm is None or poly_utm.is_empty:
+        return []
+    minx, miny, maxx, maxy = poly_utm.bounds
+    xs = np.arange(minx, maxx + step_m, step_m, dtype=float)
+    ys = np.arange(miny, maxy + step_m, step_m, dtype=float)
+    out = []
+    jitter = step_m * 0.25
+    for x in xs:
+        for y in ys:
+            xx = x + (random.random() - 0.5) * jitter
+            yy = y + (random.random() - 0.5) * jitter
+            if poly_utm.contains(Point(xx, yy)):
+                out.append((xx, yy))
+    random.shuffle(out)
+    return out
+
+def _greedy_maximin(points_xy: list[tuple[float,float]], k: int, min_sep_m: float) -> list[tuple[float,float]]:
+    """
+    Start centers by maximizing minimum pairwise distance (farthest-point).
+    Enforce minimum separation while selecting.
+    """
+    if not points_xy or k <= 0:
+        return []
+
+    # Seed with the most "central" candidate (largest distance to polygon edges is expensive;
+    # simplest robust seed: just use a random candidate).
+    chosen = [points_xy[0]]
+    pts = np.asarray(points_xy, dtype=float)
+
+    def _mindist_to_chosen(xy):
+        # If only one chosen, quick distance
+        return min(np.hypot(xy[0]-c[0], xy[1]-c[1]) for c in chosen)
+
+    # Greedy additions
+    while len(chosen) < k and len(chosen) < len(points_xy):
+        best = None
+        best_d = -1.0
+        for (x, y) in points_xy:
+            d = _mindist_to_chosen((x, y))
+            if d > best_d:
+                best_d = d
+                best = (x, y)
+        if best is None:
+            break
+        # Keep it only if it respects min separation
+        if all(np.hypot(best[0]-c[0], best[1]-c[1]) >= min_sep_m for c in chosen):
+            chosen.append(best)
+        else:
+            # prune candidates too close to existing centers
+            points_xy = [(x,y) for (x,y) in points_xy
+                         if all(np.hypot(x-c[0], y-c[1]) >= min_sep_m*0.95 for c in chosen)]
+            if not points_xy:
+                break
+    return chosen[:k]
+
+def place_sites_packed_in_polygon(polygon_utm, n_sites, range_mi, fwd: Transformer, inv: Transformer,
+                                  min_sep_factor: float = 1.8,    # 1.6–2.0 → less overlap as it rises
+                                  grid_step_factor: float = 0.9,  # smaller → denser candidates
+                                  relax_iters: int = 12,
+                                  relax_step_factor: float = 0.35):
+    """
+    Coverage-first placement:
+      1) Build candidate grid inside polygon (UTM)
+      2) Greedy maximin seed with minimum separation ≈ (min_sep_factor * radius)
+      3) Short relaxation: repel nearby centers; snap to nearest candidate that keeps min sep
+      4) Convert back to lat/lon
+    """
+    if polygon_utm is None or n_sites < 1 or fwd is None or inv is None:
+        return []
+
+    r_m = float(range_mi) * 1609.34
+    min_sep = float(min_sep_factor) * r_m
+    step = float(grid_step_factor) * r_m
+
+    # Build/expand candidate set until we have enough points to work with
+    candidates = _poly_sample_grid(polygon_utm, step_m=step)
+    tries = 0
+    while len(candidates) < max(n_sites, 50) and tries < 3:
+        step *= 0.75
+        candidates = _poly_sample_grid(polygon_utm, step_m=step)
+        tries += 1
+        if not candidates:
+            break
+    if not candidates:
+        return []
+
+    # Seed centers
+    centers = _greedy_maximin(candidates.copy(), k=n_sites, min_sep_m=min_sep)
+    if not centers:
+        return []
+
+    cand_np = np.asarray(candidates, dtype=float)
+
+    # Helper: keep a center inside polygon & obey min-sep by snapping to nearest candidate
+    def _snap_valid(xy, idx_self):
+        # sort candidates by distance to xy
+        dx = cand_np[:,0] - xy[0]
+        dy = cand_np[:,1] - xy[1]
+        dist = dx*dx + dy*dy
+        order = np.argsort(dist)
+        for j in order[:200]:  # local search window
+            px, py = cand_np[j]
+            ok = True
+            for k, c in enumerate(centers):
+                if k == idx_self: 
+                    continue
+                if np.hypot(px - c[0], py - c[1]) < (min_sep * 0.98):
+                    ok = False
+                    break
+            if ok:
+                return (float(px), float(py))
+        return xy  # fallback: keep original
+
+    # Relaxation: repel nearby centers, then snap to valid candidate
+    for _ in range(relax_iters):
+        for i in range(len(centers)):
+            xi, yi = centers[i]
+            force_x = 0.0
+            force_y = 0.0
+            for j, (xj, yj) in enumerate(centers):
+                if i == j:
+                    continue
+                dx = xi - xj
+                dy = yi - yj
+                d = math.hypot(dx, dy)
+                if d < 1e-6:
+                    continue
+                # Repel if closer than min_sep; strength rises as d shrinks
+                if d < min_sep:
+                    w = (min_sep - d) / min_sep  # 0..1
+                    force_x += (dx / d) * w
+                    force_y += (dy / d) * w
+            if force_x == 0.0 and force_y == 0.0:
+                continue
+            step_m = relax_step_factor * r_m
+            trial = (xi + force_x * step_m, yi + force_y * step_m)
+            # Snap to nearest valid candidate (keeps inside polygon & min-sep)
+            trial = _snap_valid(trial, idx_self=i)
+            centers[i] = trial
+
+    # Back-project to lat/lon
+    xs = np.asarray([c[0] for c in centers], dtype=float)
+    ys = np.asarray([c[1] for c in centers], dtype=float)
+    lat_c, lon_c = _unproject_points(inv, xs, ys)
+    return list(zip(lat_c.tolist(), lon_c.tolist()))
+
 # ---------------- Panel renderer (unchanged other than using TARGET_AREA_SQMI) ----------
 def panel(title, product_names_list, is_left=True, competitor=None):
     with st.container(border=True):
@@ -2494,11 +2648,20 @@ def panel(title, product_names_list, is_left=True, competitor=None):
 
             fwd = fwd_calls if fwd_calls else _make_transformers(df_all["lat"].values, df_all["lon"].values)[0]
             inv = inv_calls if inv_calls else _make_transformers(df_all["lat"].values, df_all["lon"].values)[1]
-            centers = place_sites_kmeans_in_polygon(
-                df_all["lat"].values, df_all["lon"].values,
-                PLACEMENT_POLY_UTM, n_sites=required_locs,
-                fwd=fwd, inv=inv
+            centers = place_sites_packed_in_polygon(
+                PLACEMENT_POLY_UTM, n_sites=required_locs, range_mi=comp_range_mi,
+                fwd=fwd, inv=inv,
+                min_sep_factor=1.8,        # → 2.0 for even less overlap
+                grid_step_factor=0.9,      # smaller → denser candidates
+                relax_iters=12,             # increase to 20 if you want even smoother spread
+                relax_step_factor=0.35
             )
+            if not centers:
+                centers = place_sites_kmeans_in_polygon(
+                    df_all["lat"].values, df_all["lon"].values,
+                    PLACEMENT_POLY_UTM, n_sites=required_locs,
+                    fwd=fwd, inv=inv
+                )
 
             # map center fallback
             if launch_coords:
@@ -2700,11 +2863,20 @@ else:
                 st.error("Not enough geometry to place competitor sites.")
                 return
 
-            centers = place_sites_kmeans_in_polygon(
-                df_all["lat"].values, df_all["lon"].values,
-                PLACEMENT_FC_POLY_UTM, n_sites=required_locs,
-                fwd=fwd_calls, inv=inv_calls
+            centers = place_sites_packed_in_polygon(
+                PLACEMENT_FC_POLY_UTM, n_sites=required_locs, range_mi=comp_range_mi,
+                fwd=fwd_calls, inv=inv_calls,
+                min_sep_factor=1.8,
+                grid_step_factor=0.9,
+                relax_iters=12,
+                relax_step_factor=0.35
             )
+            if not centers:
+                centers = place_sites_kmeans_in_polygon(
+                    df_all["lat"].values, df_all["lon"].values,
+                    PLACEMENT_FC_POLY_UTM, n_sites=required_locs,
+                    fwd=fwd_calls, inv=inv_calls
+                )
 
             if launch_coords_full:
                 lat0, lon0 = float(launch_coords_full[0][0]), float(launch_coords_full[0][1])
