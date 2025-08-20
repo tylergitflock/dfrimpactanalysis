@@ -2386,20 +2386,18 @@ def compute_our_yearly_price_no_discount():
 our_base = compute_our_yearly_price_no_discount()
 
 # --- Coverage-driven placement (hex grid) -----------------------------------
-import math
-
 def place_sites_hex_in_polygon(polygon_utm, n_sites, range_mi, fwd, inv):
     """
     Place coverage circles using a hexagonal grid inside the polygon.
-    - Builds a hex lattice of candidate centers spaced by ~circle diameter
-    - Selects up to n_sites centers that fall inside polygon
+    - Builds a hex lattice of candidate centers spaced by ~1.7×R
+    - Picks up to n_sites centers that fall inside polygon
     - Converts back to lat/lon
     """
     if polygon_utm is None or n_sites < 1 or fwd is None or inv is None:
         return []
 
     r_m = float(range_mi) * 1609.34
-    spacing = r_m * 1.7   # hex spacing (tweak 1.6–1.9 to adjust overlap)
+    spacing = r_m * 1.7   # tweak 1.6–1.9 to adjust overlap vs. gaps
 
     minx, miny, maxx, maxy = polygon_utm.bounds
     dx = spacing
@@ -2421,9 +2419,12 @@ def place_sites_hex_in_polygon(polygon_utm, n_sites, range_mi, fwd, inv):
     if not candidates:
         return []
 
-    # If there are more candidates than needed, spread them evenly
-    step = max(1, len(candidates) // n_sites)
-    chosen = candidates[::step][:n_sites]
+    # Evenly sample across the candidate list so selection is spread
+    if len(candidates) <= n_sites:
+        chosen = candidates
+    else:
+        idxs = np.linspace(0, len(candidates) - 1, num=n_sites, dtype=int)
+        chosen = [candidates[i] for i in idxs]
 
     xs = np.asarray([c[0] for c in chosen], dtype=float)
     ys = np.asarray([c[1] for c in chosen], dtype=float)
@@ -2541,11 +2542,7 @@ def panel(title, product_names_list, is_left=True, competitor=None):
             inv = inv_calls if inv_calls else _make_transformers(df_all["lat"].values, df_all["lon"].values)[1]
             centers = place_sites_hex_in_polygon(
                 PLACEMENT_POLY_UTM, n_sites=required_locs, range_mi=comp_range_mi,
-                fwd=fwd, inv=inv,
-                min_sep_factor=1.8,        # → 2.0 for even less overlap
-                grid_step_factor=0.9,      # smaller → denser candidates
-                relax_iters=12,             # increase to 20 if you want even smoother spread
-                relax_step_factor=0.35
+                fwd=fwd, inv=inv
             )
             if not centers:
                 centers = place_sites_kmeans_in_polygon(
@@ -2756,11 +2753,7 @@ else:
 
             centers = place_sites_hex_in_polygon(
                 PLACEMENT_FC_POLY_UTM, n_sites=required_locs, range_mi=comp_range_mi,
-                fwd=fwd_calls, inv=inv_calls,
-                min_sep_factor=1.8,
-                grid_step_factor=0.9,
-                relax_iters=12,
-                relax_step_factor=0.35
+                fwd=fwd_calls, inv=inv_calls
             )
             if not centers:
                 centers = place_sites_kmeans_in_polygon(
