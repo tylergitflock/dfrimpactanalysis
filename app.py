@@ -486,10 +486,61 @@ else:
     )
     launch_src = "upload" if launch_file else None
 
+# ─── Launch Locations Loader ──────────────────────────────
+
+def _load_launch_locations_csv(file_obj):
+    """
+    Supports two formats:
+      NEW:  Row1: A1='Agency Name', B1='<name>'
+             Row2: A2='Sq. Mi.',     B2='<area>'
+             Row3: headers for the table
+             Row4+: data
+      OLD:  Plain CSV with headers in first row.
+    Returns: (launch_df, meta_agency_name_or_None, meta_city_area_sqmi_or_None)
+    """
+    import pandas as pd
+    from io import BytesIO
+
+    raw = file_obj.read()
+    try:
+        # Try to sniff "new" format
+        df0 = pd.read_csv(BytesIO(raw), header=None, dtype=str, keep_default_na=False)
+        looks_new = False
+        if df0.shape[0] >= 3 and df0.shape[1] >= 2:
+            a1 = str(df0.iat[0, 0]).strip().lower()
+            a2 = str(df0.iat[1, 0]).strip().lower()
+            looks_new = ("agency" in a1 and "name" in a1) and ("sq" in a2 and "mi" in a2)
+
+        if looks_new:
+            meta_agency = (df0.iat[0, 1] or "").strip() or None
+            try:
+                meta_sqmi = float(str(df0.iat[1, 1]).replace(",", "").strip())
+            except Exception:
+                meta_sqmi = None
+
+            headers = df0.iloc[2].tolist()
+            data = df0.iloc[3:].copy()
+            data.columns = headers
+            return data.reset_index(drop=True), meta_agency, meta_sqmi
+
+        # fallback: old style
+        df_old = pd.read_csv(BytesIO(raw))
+        return df_old, None, None
+
+    except Exception:
+        df_old = pd.read_csv(BytesIO(raw))
+        return df_old, None, None
+
 if launch_file is not None:
-    st.sidebar.success("Loaded launch locations from saved run." if launch_src=="replay"
-                       else "Using uploaded launch locations file.")
-    launch_df = pd.read_csv(launch_file)
+    st.sidebar.success(
+        "Loaded launch locations from saved run." if launch_src == "replay"
+        else "Using uploaded launch locations file."
+    )
+    launch_df, _meta_agency, _meta_sqmi = _load_launch_locations_csv(launch_file)
+    try:
+        launch_file.seek(0)
+    except Exception:
+        pass
 else:
     if _EDITOR is None:
         st.sidebar.error("Upgrade Streamlit or upload a CSV with launch locations.")
@@ -500,6 +551,15 @@ else:
         use_container_width=True,
         key="launch_editor"
     )
+    _meta_agency, _meta_sqmi = None, None
+
+# ─── Apply metadata ──────────────────────────────────────
+
+if _meta_agency and not (st.session_state.get("agency_name") or "").strip():
+    st.session_state["agency_name"] = _meta_agency
+
+if _meta_sqmi and _meta_sqmi > 0:
+    st.session_state["city_area_sqmi"] = float(_meta_sqmi)
 
 # 2b) Normalize headers and make sure required columns exist
 launch_df.columns = [c.strip() for c in launch_df.columns]
