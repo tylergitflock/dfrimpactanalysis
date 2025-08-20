@@ -2385,6 +2385,51 @@ def compute_our_yearly_price_no_discount():
 
 our_base = compute_our_yearly_price_no_discount()
 
+# --- Coverage-driven placement (hex grid) -----------------------------------
+import math
+
+def place_sites_hex_in_polygon(polygon_utm, n_sites, range_mi, fwd, inv):
+    """
+    Place coverage circles using a hexagonal grid inside the polygon.
+    - Builds a hex lattice of candidate centers spaced by ~circle diameter
+    - Selects up to n_sites centers that fall inside polygon
+    - Converts back to lat/lon
+    """
+    if polygon_utm is None or n_sites < 1 or fwd is None or inv is None:
+        return []
+
+    r_m = float(range_mi) * 1609.34
+    spacing = r_m * 1.7   # hex spacing (tweak 1.6–1.9 to adjust overlap)
+
+    minx, miny, maxx, maxy = polygon_utm.bounds
+    dx = spacing
+    dy = spacing * math.sqrt(3) / 2.0
+
+    candidates = []
+    y = miny
+    row = 0
+    while y <= maxy:
+        x = minx + (dx / 2.0 if row % 2 else 0)
+        while x <= maxx:
+            pt = Point(x, y)
+            if polygon_utm.contains(pt):
+                candidates.append((x, y))
+            x += dx
+        y += dy
+        row += 1
+
+    if not candidates:
+        return []
+
+    # If there are more candidates than needed, spread them evenly
+    step = max(1, len(candidates) // n_sites)
+    chosen = candidates[::step][:n_sites]
+
+    xs = np.asarray([c[0] for c in chosen], dtype=float)
+    ys = np.asarray([c[1] for c in chosen], dtype=float)
+    lat_c, lon_c = _unproject_points(inv, xs, ys)
+    return list(zip(lat_c.tolist(), lon_c.tolist()))
+
 # ---------------- Competitor math (locations from TARGET_AREA_SQMI) ----------
 def circle_area_sqmi(radius_mi: float) -> float:
     return math.pi * (radius_mi ** 2)
