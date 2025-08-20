@@ -484,26 +484,25 @@ def _load_launch_locations_csv(file_obj):
     from io import BytesIO
 
     raw = file_obj.read()
+    file_obj.seek(0)  # reset pointer so we can reuse file_obj downstream
+
     try:
         # Try to sniff "new" format
         df0 = pd.read_csv(BytesIO(raw), header=None, dtype=str, keep_default_na=False)
-        looks_new = False
         if df0.shape[0] >= 3 and df0.shape[1] >= 2:
             a1 = str(df0.iat[0, 0]).strip().lower()
             a2 = str(df0.iat[1, 0]).strip().lower()
-            looks_new = ("agency" in a1 and "name" in a1) and ("sq" in a2 and "mi" in a2)
+            if ("agency" in a1 and "name" in a1) and ("sq" in a2 and "mi" in a2):
+                meta_agency = (df0.iat[0, 1] or "").strip() or None
+                try:
+                    meta_sqmi = float(str(df0.iat[1, 1]).replace(",", "").strip())
+                except Exception:
+                    meta_sqmi = None
 
-        if looks_new:
-            meta_agency = (df0.iat[0, 1] or "").strip() or None
-            try:
-                meta_sqmi = float(str(df0.iat[1, 1]).replace(",", "").strip())
-            except Exception:
-                meta_sqmi = None
-
-            headers = df0.iloc[2].tolist()
-            data = df0.iloc[3:].copy()
-            data.columns = headers
-            return data.reset_index(drop=True), meta_agency, meta_sqmi
+                headers = df0.iloc[2].tolist()
+                data = df0.iloc[3:].copy()
+                data.columns = headers
+                return data.reset_index(drop=True), meta_agency, meta_sqmi
 
         # fallback: old style
         df_old = pd.read_csv(BytesIO(raw))
@@ -513,26 +512,22 @@ def _load_launch_locations_csv(file_obj):
         df_old = pd.read_csv(BytesIO(raw))
         return df_old, None, None
 
+
+# ─── Use loader depending on whether a file was provided ─────────────────
+
 if launch_file is not None:
     st.sidebar.success(
         "Loaded launch locations from saved run." if launch_src == "replay"
         else "Using uploaded launch locations file."
     )
-    # Load the CSV and pull metadata in one place
-    def _load_launch_locations_csv(file):
-        # Read metadata only
-        meta_df = pd.read_csv(file, nrows=2, header=None)
-        agency   = str(meta_df.iat[0,1]).strip() if pd.notna(meta_df.iat[0,1]) else None
-        sqmi     = float(meta_df.iat[1,1]) if pd.notna(meta_df.iat[1,1]) else None
-        
-        # Reset pointer and read the actual launch data (skip 2 rows)
-        file.seek(0)
-        df = pd.read_csv(file, skiprows=2)
-        return df, agency, sqmi
     try:
         launch_file.seek(0)  # reset pointer just in case
     except Exception:
         pass
+
+    # Use the unified loader
+    launch_df, _meta_agency, _meta_sqmi = _load_launch_locations_csv(launch_file)
+
 else:
     if _EDITOR is None:
         st.sidebar.error("Upgrade Streamlit or upload a CSV with launch locations.")
@@ -544,6 +539,7 @@ else:
         key="launch_editor"
     )
     _meta_agency, _meta_sqmi = None, None
+
 
 # ─── Safely push metadata into session state ─────────────────────────────
 
