@@ -501,10 +501,15 @@ def _load_launch_locations_csv(file_obj):
                 meta_sqmi = None
 
             # Row 3 = headers, Row 4+ = data
-            headers = df0.iloc[2].tolist()
+            headers = [h.strip() for h in df0.iloc[2].tolist()]
             data = df0.iloc[3:].copy()
             data.columns = headers
-
+            
+            # Ensure Lat/Lon are numeric
+            if "Lat" in data.columns and "Lon" in data.columns:
+                data["Lat"] = pd.to_numeric(data["Lat"], errors="coerce")
+                data["Lon"] = pd.to_numeric(data["Lon"], errors="coerce")
+            
             return data.reset_index(drop=True), meta_agency, meta_sqmi
 
         # fallback: old style CSV
