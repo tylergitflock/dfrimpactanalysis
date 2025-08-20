@@ -1787,27 +1787,17 @@ def _unproject_points(inv: Transformer, xs, ys):
 # ---------- City limits from call data (concave hull in meters) ----------
 def calls_concave_hull_utm(
     lat, lon, eps_m=None, min_samples=20,
-    alpha=None, buffer_smooth_m=150, simplify_m=60   # ← tighter defaults
+    alpha=None, buffer_smooth_m=150, simplify_m=60
 ):
-    """
-    Build a concave hull from call points in local UTM.
-    Returns (poly_utm, area_sqmi, (fwd, inv)).
-    Robust to NaN/Inf, duplicates, and degenerate configs; falls back to convex hull.
-    """
-    # clean inputs
     lat = pd.to_numeric(pd.Series(lat), errors="coerce")
     lon = pd.to_numeric(pd.Series(lon), errors="coerce")
     mask = lat.notna() & lon.notna()
     if mask.sum() < 10:
         return None, 0.0, (None, None)
 
-    # choose UTM from centroid of valid points
     fwd, inv = _make_transformers(lat[mask].values, lon[mask].values)
-
-    # project to meters
     X, Y = _project_points(fwd, lat[mask].values, lon[mask].values)
 
-    # drop any non-finite projected points
     finite = np.isfinite(X) & np.isfinite(Y)
     X, Y = X[finite], Y[finite]
     if len(X) < max(3, min_samples):
@@ -1815,17 +1805,14 @@ def calls_concave_hull_utm(
 
     XY = np.c_[X, Y]
 
-    # --- NEW: dedupe to avoid Delaunay failures on near-identical points
-    XY = np.unique(np.round(XY, 1), axis=0)  # 0.1 m grid; collapse dupes
+    # de-dupe near-identical points to stabilize Delaunay
+    XY = np.unique(np.round(XY, 1), axis=0)
     if len(XY) < 3:
         return None, 0.0, (fwd, inv)
 
-    # DBSCAN outlier removal (keep largest cluster)
+    # DBSCAN outlier removal (auto eps with clamp)
     if eps_m is None:
-        # auto eps ≈ median 1-NN distance; clamp to a sane band (50..400 m)
         from sklearn.neighbors import NearestNeighbors
-        if len(XY) < 3:
-            return None, 0.0, (fwd, inv)
         nn = NearestNeighbors(n_neighbors=2).fit(XY)
         dists, _ = nn.kneighbors(XY)
         med = float(np.median(dists[:, 1]))
@@ -1834,42 +1821,48 @@ def calls_concave_hull_utm(
         eps = float(eps_m)
 
     labels = DBSCAN(eps=eps, min_samples=min_samples).fit_predict(XY)
-    if (labels >= 0).any():
-        labs, cnts = np.unique(labels[labels >= 0], return_counts=True)
-        XYk = XY[labels == labs[np.argmax(cnts)]]
-    else:
-        XYk = XY
-
+    XYk = XY[labels == np.bincount(labels[labels >= 0]).argmax()] if (labels >= 0).any() else XY
     if len(XYk) < 3:
         return None, 0.0, (fwd, inv)
 
-    # alpha (concavity) — default from 1-NN again
+    # --- radial 90th-percentile trim to drop long tentacles between towns ---
+    cx, cy = XYk.mean(axis=0)
+    r = np.hypot(XYk[:,0]-cx, XYk[:,1]-cy)
+    cut = np.quantile(r, 0.90)
+    XYt = XYk[r <= cut]
+    if len(XYt) >= 10:
+        XYk = XYt  # only trim if enough points remain
+
+    # alpha from local spacing
     if alpha is None:
+        from sklearn.neighbors import NearestNeighbors
         nn2 = NearestNeighbors(n_neighbors=2).fit(XYk)
         d2, _ = nn2.kneighbors(XYk)
         nn_med = float(np.median(d2[:, 1]))
         nn_med = nn_med if np.isfinite(nn_med) and nn_med > 0 else 50.0
         alpha = 1.0 / nn_med
 
-    # build polygon, with safe fallback
+    # build polygon; safe fallback to convex hull
     try:
         pts = [Point(float(x), float(y)) for x, y in XYk]
         poly = alphashape.alphashape(pts, alpha)
     except Exception:
         poly = None
-
     if not poly or poly.is_empty:
-        # fallback: convex hull; if collinear, give it a tiny width
         hull = MultiPoint([Point(float(x), float(y)) for x, y in XYk]).convex_hull
         if getattr(hull, "geom_type", "") == "LineString":
-            hull = hull.buffer(25.0)  # meters
+            hull = hull.buffer(25.0)
         poly = hull
 
     if getattr(poly, "geom_type", "") == "MultiPolygon":
         poly = max(poly.geoms, key=lambda p: p.area)
 
-    # smooth/simplify in meters (tighter than before to avoid over-inflating area)
+    # tighter smoothing → less area inflation
     poly = poly.buffer(buffer_smooth_m).simplify(simplify_m).buffer(-buffer_smooth_m).buffer(0)
+
+    # optional micro-erosion to pull in the outline a block or two
+    poly = poly.buffer(-60).buffer(60)
+
     if poly.is_empty:
         return None, 0.0, (fwd, inv)
 
@@ -2125,36 +2118,7 @@ with st.sidebar.expander("City limits (default = from call data)", expanded=Fals
         st.caption("Call-data hull unavailable (not enough points).")
 
     city_query = st.text_input("(Optional) Search Wikidata city name (e.g., \"Boise, ID\")", key="cmp_city_query")
-    if st.button("Fetch Wikidata area", use_container_width=True):
-        sqmi = None
-        try:
-            import requests
-            r = requests.get(
-                "https://www.wikidata.org/w/api.php",
-                params={"action":"wbsearchentities","search":city_query,"language":"en","type":"item","format":"json","limit":5},
-                timeout=10,
-            )
-            r.raise_for_status()
-            hits = r.json().get("search", [])
-            if hits:
-                pick = next((h for h in hits if "city" in (h.get("description","").lower())), hits[0])
-                qid = pick["id"]
-                r2 = requests.get(f"https://www.wikidata.org/wiki/Special:EntityData/{qid}.json", timeout=10)
-                r2.raise_for_status()
-                ent = list(r2.json()["entities"].values())[0]
-                areas = ent.get("claims", {}).get("P2046", [])
-                if areas:
-                    v = areas[0].get("mainsnak", {}).get("datavalue", {}).get("value", {})
-                    amount = float(str(v.get("amount","0")).replace("+",""))
-                    sqmi = amount / SQM_PER_SQMI
-        except Exception:
-            sqmi = None
-
-        if sqmi:
-            st.session_state["city_area_sqmi"] = float(sqmi)
-            st.success(f"Wikidata area loaded: {sqmi:.2f} sq mi (override)")
-        else:
-            st.warning("Couldn’t find area automatically. You can enter a manual value below.")
+    # (leave your Wikidata button block as-is)
 
     current_default = st.session_state.get("city_area_sqmi", CITY_AREA_SQMI_DEFAULT or 0.0)
     manual_city_area = st.number_input(
@@ -2163,17 +2127,17 @@ with st.sidebar.expander("City limits (default = from call data)", expanded=Fals
     )
     st.session_state["city_area_sqmi"] = manual_city_area
 
+# ---- EFFECTIVE city area used for competitor math (NO override later) ----
 CITY_AREA_SQMI = float(st.session_state.get("city_area_sqmi", 0.0)) or None
+EFFECTIVE_CITY_AREA = CITY_AREA_SQMI or CALLS_AREA_SQMI                   # <- this is the scalar we will use
 
-# Final placement polygon + scalar area used for competitor math
-if calls_poly_utm is not None:
-    PLACEMENT_POLY_UTM = calls_poly_utm
-    TARGET_AREA_SQMI = CITY_AREA_SQMI or CALLS_AREA_SQMI or OUR_AREA_SQMI_EST
-    target_label = f"Target area (call-derived city limits): {TARGET_AREA_SQMI:.2f} sq mi"
-else:
-    PLACEMENT_POLY_UTM = our_poly_utm
-    TARGET_AREA_SQMI = CITY_AREA_SQMI or OUR_AREA_SQMI_EST
-    target_label = f"Target area (our union-of-circles): {TARGET_AREA_SQMI:.2f} sq mi"
+# Placement polygon we draw = call hull if present, else our union-of-circles
+PLACEMENT_POLY_UTM = calls_poly_utm or our_poly_utm
+
+# Scalar target area for competitor count = EFFECTIVE city area (no re-assignment later)
+TARGET_AREA_SQMI = EFFECTIVE_CITY_AREA or OUR_AREA_SQMI_EST
+
+target_label = f"Target area (city limits used for math): {TARGET_AREA_SQMI:.2f} sq mi"
 st.caption(target_label)
 
 # ---------------- Aerodome yearly pricing (no discount UI in Comparison) -----
