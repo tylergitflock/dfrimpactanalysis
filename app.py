@@ -2279,6 +2279,15 @@ def panel(title, product_names_list, is_left=True, competitor=None):
                 show_circle=True,
                 launch_coords=launch_coords
             )
+        
+            # ← ADD THESE THREE METRICS (mirror the competitor side)
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Required Locations", f"{launch_count:,}")   # len(launch_rows)
+            c2.metric("Total Docks",        f"{total_docks:,}")    # sum(Number of Docks)
+            c3.metric("Yearly Cost",        f"${our_base:,}")      # from compute_our_yearly_price_no_discount()
+        
+            # Optional context line (keep or remove)
+            # st.caption(f"Docks listed in CSV: {total_docks:,} • Radars: {total_radars:,}")
         else:
             # Right = competitor circles; count driven by TARGET_AREA_SQMI (CSV-based, min with our coverage)
             plan = competitor_plan(competitor, TARGET_AREA_SQMI)
