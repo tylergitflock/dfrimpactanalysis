@@ -1488,7 +1488,7 @@ else:
 def render_map(
     df_pts,
     heat=False,
-    title="",
+    title=None,
     key=None,
     heat_radius=15,
     heat_blur=25,
@@ -1497,7 +1497,9 @@ def render_map(
     hotspot_center=None,
     hotspot_radius=None,
 ):
-    st.subheader(title)
+    
+    if title:
+        st.subheader(title)
 
     # drop any NaNs so folium never errors
     if {"lat","lon"}.issubset(df_pts.columns):
