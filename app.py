@@ -1520,6 +1520,68 @@ except Exception as _e:
     FAA_GEOJSON = None
     st.sidebar.warning(f"FAA layer failed to load: {_e}")
 
+# --- GeoJSON normalizer for Folium ------------------------------------------
+def _as_feature_collection(obj):
+    """
+    Accepts: dict, str (JSON), single Feature/geometry, or list of Features/geoms.
+    Returns: FeatureCollection dict or None if it can't be parsed.
+    """
+    import json
+
+    if obj is None:
+        return None
+
+    # If string, try to JSON-decode
+    if isinstance(obj, str):
+        try:
+            obj = json.loads(obj)
+        except Exception:
+            return None
+
+    # If it's already a dict
+    if isinstance(obj, dict):
+        t = obj.get("type")
+        # Proper FeatureCollection
+        if t == "FeatureCollection" and isinstance(obj.get("features"), list):
+            return obj
+        # Single Feature
+        if t == "Feature":
+            return {"type": "FeatureCollection", "features": [obj]}
+        # Single geometry
+        if t in {"Polygon", "MultiPolygon", "LineString", "MultiLineString", "Point", "MultiPoint"}:
+            return {
+                "type": "FeatureCollection",
+                "features": [{"type": "Feature", "properties": {}, "geometry": obj}],
+            }
+        # Some objects come as {"features": [...] } without explicit type
+        if "features" in obj and isinstance(obj["features"], list):
+            return {"type": "FeatureCollection", "features": obj["features"]}
+
+        # Not a recognized structure
+        return None
+
+    # If it's a list (e.g., list of features or geometries)
+    if isinstance(obj, list):
+        feats = []
+        for g in obj:
+            if isinstance(g, str):
+                try:
+                    import json
+                    g = json.loads(g)
+                except Exception:
+                    continue
+            if not isinstance(g, dict):
+                continue
+            gt = g.get("type")
+            if gt == "Feature":
+                feats.append(g)
+            elif gt in {"Polygon", "MultiPolygon", "LineString", "MultiLineString", "Point", "MultiPoint"}:
+                feats.append({"type": "Feature", "properties": {}, "geometry": g})
+        if feats:
+            return {"type": "FeatureCollection", "features": feats}
+
+    return None
+
 # ─── 6) MAPS & HEATMAPS ──────────────────────────────────────────────────────
 st.markdown("---")
 st.header("Maps & Heatmaps")
@@ -1571,17 +1633,16 @@ def render_map(
 
     m = folium.Map(location=center, zoom_start=10)
 
-    # --- FAA / other overlays (GeoJSON) ---
+       # --- Add overlays safely (FAA etc.) -------------------------------------
     if geojson_overlays:
         for _name, _gj in geojson_overlays:
-            if _gj:
-                folium.GeoJson(
-                    _gj,
-                    name=_name,
-                    style_function=lambda feat: {"color": "#1f6feb", "weight": 1, "fillOpacity": 0},
-                    highlight_function=lambda feat: {"weight": 2},
-                    tooltip=_name,
-                ).add_to(m)
+            gj_fc = _as_feature_collection(_gj)
+            if not gj_fc:
+                continue  # skip invalid overlays quietly
+            try:
+                folium.GeoJson(gj_fc, name=_name, tooltip=_name).add_to(m)
+            except Exception:
+                pass
 
     # blue drone-range circle(s)
     if show_circle and launch_coords:
