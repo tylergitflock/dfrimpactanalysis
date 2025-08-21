@@ -2794,16 +2794,37 @@ else:
         )
         panel_full_right(competitor=comp_choice_fc)
 
-# ─── REPORT VALUES & EXPORTS SECTION ──────────────────────────────
-with st.expander("📊 Report Values & Exports", expanded=False):
+# ─── Bottom drawer: Report Values + Exports ───────────────────────────────────
+st.markdown("---")
+with st.expander("Report Values & Exports", expanded=False):
+    # Report table (uses your already-computed DataFrame)
     st.subheader("Report Values")
     st.dataframe(report_values_df, use_container_width=True)
 
-    st.subheader("ESRI CSV Exports")
+    # CSV / ESRI exports (uses the same objects you already pass to the buttons)
+    st.markdown("### ESRI CSV / Exports")
     col1, col2, col3 = st.columns(3)
     with col1:
-        st.download_button("Download DFR Only", data=dfr_csv, file_name="dfr_only.csv", mime="text/csv")
+        st.download_button(
+            label="Download DFR Only",
+            data=dfr_only_csv,                 # <-- same variable you used before
+            file_name="dfr_only.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
     with col2:
-        st.download_button("Download In Range", data=in_range_csv, file_name="in_range.csv", mime="text/csv")
+        st.download_button(
+            label="Download In Range",
+            data=in_range_csv,                 # <-- same variable you used before
+            file_name="in_range.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
     with col3:
-        st.download_button("Download Clearable", data=clearable_csv, file_name="clearable.csv", mime="text/csv")
+        st.download_button(
+            label="Download Clearable",
+            data=clearable_csv,                # <-- same variable you used before
+            file_name="clearable.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
