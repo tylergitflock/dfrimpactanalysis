@@ -1222,10 +1222,6 @@ report_df = pd.DataFrame({
     "Metric": [r[0] for r in rows],
     "Result": [pretty_value(r[1],r[2]) for r in rows],
 })
-st.subheader("Report Values")
-st.dataframe(report_df, use_container_width=True)
-
-
 
 # ─── Auto-save this run ──────────────────────────────────────────────────────
 try:
@@ -1459,18 +1455,6 @@ if audit_on:
         "Officers (FTE)": officers,
         "ROI": roi,
     })
-
-# ─── 5) CSV DOWNLOADS ────────────────────────────────────────────────────────
-st.subheader("ESRI CSV Exports")
-cols = ["lat","lon","patrol_sec","drone_eta_sec","onscene_sec","priority","call_type_up"]
-c1,c2,c3 = st.columns(3)
-with c1:
-    st.download_button("Download DFR Only", to_csv_bytes(dfr_only[cols]), "dfr_only.csv")
-with c2:
-    st.download_button("Download In Range", to_csv_bytes(in_range[cols]), "in_range.csv")
-with c3:
-    st.download_button("Download Clearable", to_csv_bytes(clearable[cols]), "clearable.csv")
-progress.progress(100)
 
 # ─── 5.5) TOP SUMMARY (matches PDF headline metrics) ─────────────────────────
 st.markdown("---")
@@ -2809,3 +2793,17 @@ else:
             COMPETITOR_OPTIONS, index=0, key="cmp_choice_fullcity"
         )
         panel_full_right(competitor=comp_choice_fc)
+
+# ─── REPORT VALUES & EXPORTS SECTION ──────────────────────────────
+with st.expander("📊 Report Values & Exports", expanded=False):
+    st.subheader("Report Values")
+    st.dataframe(report_values_df, use_container_width=True)
+
+    st.subheader("ESRI CSV Exports")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.download_button("Download DFR Only", data=dfr_csv, file_name="dfr_only.csv", mime="text/csv")
+    with col2:
+        st.download_button("Download In Range", data=in_range_csv, file_name="in_range.csv", mime="text/csv")
+    with col3:
+        st.download_button("Download Clearable", data=clearable_csv, file_name="clearable.csv", mime="text/csv")
