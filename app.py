@@ -1506,7 +1506,7 @@ except Exception as _e:
 
 # ─── 6) MAPS & HEATMAPS ──────────────────────────────────────────────────────
 st.markdown("---")
-st.header("Maps & Heatmaps")
+st.header("CAD & Alert Response Analysis")
 
 def metrics_under(title, *pairs):
     st.caption(title)
