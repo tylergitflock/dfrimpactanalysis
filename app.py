@@ -2671,10 +2671,7 @@ with R:
     panel(comp_choice, [], is_left=False, competitor=comp_choice)
 
 
-# ─── Comparison — Full City (same logic as normal) ───────────────────────────
-st.markdown("---")
-st.header("Comparison — Full City")
-
+# ─── Comparison — Full City (only render if CSV uploaded) ────────────────────
 st.sidebar.header("Launch Locations — Full Juris (optional)")
 full_juris_file = st.sidebar.file_uploader(
     "Upload Launch Locations - Full Juris CSV",
@@ -2682,17 +2679,18 @@ full_juris_file = st.sidebar.file_uploader(
     key="launch_csv_full_juris"
 )
 
-# Full city area to target = manual override if set, else call-derived hull
-FULL_CITY_AREA = float(st.session_state.get("city_area_sqmi") or 0.0) or float(CALLS_AREA_SQMI or 0.0)
+if full_juris_file:
+    st.markdown("---")
+    st.header("Comparison — Full City")
 
-if not full_juris_file:
-    st.sidebar.info("Upload **Launch Locations – Full Juris** to show full-city comparison.")
-else:
+    # Full city area to target = manual override if set, else call-derived hull
+    FULL_CITY_AREA = float(st.session_state.get("city_area_sqmi") or 0.0) or float(CALLS_AREA_SQMI or 0.0)
+
     try:
         full_juris_file.seek(0)
     except Exception:
         pass
-
+        
     fj_df, _, _ = _load_launch_locations_csv(full_juris_file)
     fj_df.columns = [c.strip() for c in fj_df.columns]
     if "Location Name" not in fj_df.columns and "Locations" in fj_df.columns:
