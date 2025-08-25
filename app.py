@@ -434,6 +434,7 @@ replay_inputs["agency"] = _find_csv_by_partial("Agency Call Types")
 replay_inputs["launch"] = _find_csv_by_partial("Launch Locations")
 replay_inputs["alpr"]   = _find_csv_by_partial("LPR Hits by Camera")
 replay_inputs["audio"]  = _find_csv_by_partial("Audio Hits Aggregated")
+replay_inputs["full_city"] = _find_csv_by_partial("Launch Locations - Full City")
 
 # ─── 1) SIDEBAR: UPLOADS & EDITORS ───────────────────────────────────────────
 
@@ -2719,52 +2720,34 @@ with R:
     panel(comp_choice, [], is_left=False, competitor=comp_choice)
 
 
-# ─── Comparison — Full City (same logic as normal) ───────────────────────────
-# Sidebar uploader stays visible (so users can add it later)
-st.sidebar.header("Launch Locations — Full Juris (optional)")
-full_juris_file = st.sidebar.file_uploader(
-    "Upload Launch Locations - Full Juris CSV",
+# ─── Comparison — Full City (render ONLY if CSV present from ZIP or manual) ──
+
+# (1) From ZIP (if present)
+full_zip_bytes = replay_inputs.get("full_city")
+full_from_zip = None
+if full_zip_bytes:
+    buf = io.BytesIO(full_zip_bytes)
+    buf.name = "Launch Locations - Full City (from ZIP).csv"
+    full_from_zip = buf  # file-like
+
+# (2) Manual uploader (fallback / override)
+st.sidebar.header("Launch Locations — Full City (optional)")
+full_juris_file_manual = st.sidebar.file_uploader(
+    "Upload Launch Locations - Full City CSV",
     type=["csv"],
     key="launch_csv_full_juris"
 )
 
-# Try to use an already-extracted Full City DF from session (if any),
-# otherwise search through any uploaded master ZIP stored in session.
-fc_df_session = st.session_state.get("full_city_df")
-if fc_df_session is None:
-    _fc_autoload = _extract_full_city_from_any_session_zip()
-    if _fc_autoload is not None:
-        st.session_state["full_city_df"] = _fc_autoload
-        fc_df_session = _fc_autoload
-
-# Decide what we have for Full City input:
-_fj_df_source = None
-if full_juris_file is not None:
-    _fj_df_source = "upload"
-elif fc_df_session is not None:
-    _fj_df_source = "session"
-
-# Only render the Full City section if we actually have data
-if _fj_df_source is not None:
-    st.markdown("---")
-    st.header("Comparison — Full City")
-
-    if _fj_df_source == "upload":
-        fj_df, _, _ = _load_launch_locations_csv(full_juris_file)
-    else:
-        fj_df = fc_df_session
+# (3) Final source: manual wins, else ZIP; if neither → hide the whole section
+full_juris_file = full_juris_file_manual or full_from_zip
 
 if full_juris_file:
     st.markdown("---")
     st.header("Comparison — Full City")
-
-    # Full city area to target = manual override if set, else call-derived hull
-    FULL_CITY_AREA = float(st.session_state.get("city_area_sqmi") or 0.0) or float(CALLS_AREA_SQMI or 0.0)
-
-    try:
-        full_juris_file.seek(0)
-    except Exception:
-        pass
+    # ↓ keep ALL your existing Full City code from here down (seek, _load_launch_locations_csv, panels, etc.)
+else:
+    # Nothing to do; do not render this section at all.
+    pass
         
     fj_df, _, _ = _load_launch_locations_csv(full_juris_file)
     fj_df.columns = [c.strip() for c in fj_df.columns]
