@@ -2528,9 +2528,9 @@ def place_sites_kmeans_in_polygon(lat, lon, polygon_utm, n_sites, fwd: Transform
 def panel(title, product_names_list, is_left=True, competitor=None):
     with st.container(border=True):
         if title:
-            st.subheader(title)  # keep header; no extra markdown dividers
+            st.subheader(title)
 
-        # helper to render one compact specs block (used only on the LEFT)
+        # compact, single-use specs renderer (LEFT column only)
         def _render_specs_block(pnames: list[str]):
             rows = [
                 "Pricing / Dock / Year (2-Year Contract)",
@@ -2572,7 +2572,7 @@ def panel(title, product_names_list, is_left=True, competitor=None):
             c2.metric("Total Docks", f"{_our_docks:,}")
             c3.metric("Yearly Cost", f"${_our_cost:,}")
 
-            # Specs — render ONCE on the left, compact (no extra separators)
+            # Specs — render ONCE on the left
             if is_multi:
                 st.markdown("**Detected Aerodome Platforms:** " + ", ".join(detected_types_list))
                 _render_specs_block(detected_types_list)
@@ -2588,7 +2588,6 @@ def panel(title, product_names_list, is_left=True, competitor=None):
             fwd = fwd_calls if fwd_calls else _make_transformers(df_all["lat"].values, df_all["lon"].values)[0]
             inv = inv_calls if inv_calls else _make_transformers(df_all["lat"].values, df_all["lon"].values)[1]
 
-            # centers via hex grid; fallback to KMeans
             centers = place_sites_hex_in_polygon(
                 PLACEMENT_POLY_UTM, n_sites=required_locs, range_mi=comp_range_mi,
                 fwd=fwd, inv=inv
@@ -2610,32 +2609,29 @@ def panel(title, product_names_list, is_left=True, competitor=None):
 
             m = folium.Map(location=[lat0, lon0], zoom_start=11)
 
-            # FAA overlay
             if FAA_GEOJSON:
                 folium.GeoJson(FAA_GEOJSON, name="FAA Grid", tooltip="FAA Grid").add_to(m)
 
-            # Red competitor circles
             comp_r_m = comp_range_mi * 1609.34
             for (la, lo) in centers:
                 folium.Circle(location=(la, lo), radius=comp_r_m, color="red", weight=3, fill=False).add_to(m)
                 folium.CircleMarker(location=(la, lo), radius=3, color="red", fill=True).add_to(m)
 
-            # Our blue coverage for context
             for la, lo in launch_coords:
                 folium.Circle(location=(la, lo), radius=our_eff_range * 1609.34, color="blue", weight=2, fill=False, opacity=0.35).add_to(m)
 
-            # Outline (purple) of active polygon (kept on for now; can later add toggle)
             outline_latlon = polygon_outline_latlon(PLACEMENT_POLY_UTM, inv_calls)
             if outline_latlon:
-                folium.PolyLine(locations=[(lt, ln) for lt, ln in outline_latlon],
-                                color="purple", weight=4, opacity=0.8).add_to(m)
+                folium.PolyLine(
+                    locations=[(lt, ln) for lt, ln in outline_latlon],
+                    color="purple", weight=4, opacity=0.8
+                ).add_to(m)
 
             if FAA_GEOJSON:
                 folium.LayerControl(collapsed=True).add_to(m)
 
             st_folium(m, width=800, height=500, key=f"cmp_map_R_{competitor}")
 
-            # Headline metrics (competitor)
             comp_docks_per_loc = PLATFORMS[competitor]["docks_per_location"]
             total_comp_docks = required_locs * comp_docks_per_loc
             c1, c2, c3 = st.columns(3)
@@ -2647,33 +2643,6 @@ def panel(title, product_names_list, is_left=True, competitor=None):
                 f"Per-location area: {plan['per_location_area_sqmi']:.2f} sq mi • "
                 f"Radius: {comp_range_mi:.2f} mi"
             )
-        # Specs (unchanged)
-        def render_specs(pname: str):
-            specs = PLATFORMS[pname]["specs"]
-            rows = [
-                "Pricing / Dock / Year (2-Year Contract)",
-                "Number of Docks / Location",
-                "Real-world Speed (MPH)",
-                "Response Time (1 Mile) (sec)",
-                "Real-world On-scene Time (min)",
-                "Hit License Plate at 400ft Alt",
-                "Effectively Fly at 400ft Alt",
-                "Night Vision",
-                "Integrations",
-            ]
-            for r in rows:
-                if r in specs:
-                    st.write(f"**{r}**: {specs[r]}")
-
-        if is_multi:
-            if is_left:
-                st.markdown("**Detected Aerodome Platforms:** " + ", ".join(detected_types_list))
-                for p in detected_types_list:
-                    st.markdown(f"**{p}**")
-                    render_specs(p)
-                    st.markdown("---")
-        else:
-            render_specs(product_names_list[0] if product_names_list else competitor)
 
 # ---- Controls row + two panels (unchanged) ----------------------------------
 topL, topR = st.columns([3, 2])
