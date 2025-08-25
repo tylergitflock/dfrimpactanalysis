@@ -2638,11 +2638,7 @@ def panel(title, product_names_list, is_left=True, competitor=None):
             c1.metric("Required Locations", f"{required_locs:,}")
             c2.metric("Total Docks", f"{total_comp_docks:,}")
             c3.metric("Yearly Cost", f"${plan['yearly_cost']:,}")
-            st.caption(
-                f"Docks/location: {comp_docks_per_loc} • "
-                f"Per-location area: {plan['per_location_area_sqmi']:.2f} sq mi • "
-                f"Radius: {comp_range_mi:.2f} mi"
-            )
+            
                         # --- Competitor Specs (RIGHT side) ---
             if competitor in PLATFORMS:
                 specs = PLATFORMS[competitor].get("specs", {})
@@ -2857,11 +2853,7 @@ else:
             c1.metric("Required Locations", f"{required_locs:,}")
             c2.metric("Total Docks", f"{total_comp_docks:,}")
             c3.metric("Yearly Cost", f"${yearly_cost:,}")
-            st.caption(
-                f"Docks/location: {docks_per_loc} • "
-                f"Per-location area: {plan['per_location_area_sqmi']:.2f} sq mi • "
-                f"Radius: {comp_range_mi:.2f} mi"
-            )
+    
                         # --- Competitor Specs (RIGHT side, Full City) ---
             if competitor in PLATFORMS:
                 specs = PLATFORMS[competitor].get("specs", {})
