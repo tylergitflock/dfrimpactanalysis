@@ -436,6 +436,7 @@ replay_inputs["alpr"]   = _find_csv_by_partial("LPR Hits by Camera")
 replay_inputs["audio"]  = _find_csv_by_partial("Audio Hits Aggregated")
 replay_inputs["full_city"] = _find_csv_by_partial("Launch Locations - Full City")
 
+
 # ─── 1) SIDEBAR: UPLOADS & EDITORS ───────────────────────────────────────────
 
 
@@ -855,6 +856,33 @@ if hotspot_address:
         hotspot_coords = [(float(hotspot_lat_manual), float(hotspot_lon_manual))]
     else:
         st.sidebar.warning("Could not geocode that address. Enter lat/lon manually if needed.")
+
+# === Full City (Launch Locations — Full Juris) ===
+fc_src = None
+full_city_file = None
+
+# If the master ZIP pre-populated it, use that
+if replay_inputs.get("full_city"):
+    full_city_file = replay_inputs["full_city"]   # bytes-like or file-like
+    fc_src = "replay"
+else:
+    # Otherwise let the user upload manually (same pattern as ALPR/Audio)
+    full_city_file = st.sidebar.file_uploader(
+        "Upload Launch Locations - Full City CSV",
+        type=["csv"],
+        key="launch_csv_full_juris"
+    )
+    fc_src = "upload" if full_city_file else None
+
+if fc_src == "replay":
+    st.sidebar.success("Loaded Full City CSV from ZIP.")
+
+# Normalize bytes → file-like so your CSV loader works with either source
+import io
+if isinstance(full_city_file, (bytes, bytearray)):
+    _buf_fc = io.BytesIO(full_city_file)
+    _buf_fc.name = "Launch Locations - Full City.csv"
+    full_city_file = _buf_fc
         
 # ─── 2) PARSE & COMPUTE ───────────────────────────────────────────────────────
 col_map = {c.lower():c for c in raw_df.columns}
@@ -2720,69 +2748,45 @@ with R:
     panel(comp_choice, [], is_left=False, competitor=comp_choice)
 
 
-# ─── Comparison — Full City (render ONLY if CSV present from ZIP or manual) ──
+# ─── Comparison — Full City (same logic as ALPR/Audio) ──────────────────────
+fc_src = None
+full_city_file = None
+
+# (1) If the master ZIP pre-populated it, use that
+if replay_inputs.get("full_city"):
+    full_city_file = replay_inputs["full_city"]
+    fc_src = "replay"
+else:
+    # (2) Otherwise let the user upload manually
+    full_city_file = st.sidebar.file_uploader(
+        "Upload Launch Locations - Full City CSV",
+        type=["csv"],
+        key="launch_csv_full_juris"
+    )
+    fc_src = "upload" if full_city_file else None
+
+if fc_src == "replay":
+    st.sidebar.success("Loaded Full City CSV from ZIP.")
+
+# normalize to file-like if bytes
 import io
+if isinstance(full_city_file, (bytes, bytearray)):
+    buf = io.BytesIO(full_city_file)
+    buf.name = "Launch Locations - Full City.csv"
+    full_city_file = buf
 
-# Make sure replay_inputs["full_city"] is populated from the ZIP (if any)
-if replay_inputs.get("full_city") is None:
-    # pulls from st.session_state["zip_files"] using a partial match
-    replay_inputs["full_city"] = _find_csv_by_partial("Launch Locations - Full City")
-
-def _to_filelike_csv(obj, name_hint="Launch Locations - Full City.csv"):
-    """Return a file-like BytesIO for CSV content, or None if not possible."""
-    if obj is None:
-        return None
-    # Already a bytes-like blob from the ZIP
-    if isinstance(obj, (bytes, bytearray)):
-        buf = io.BytesIO(obj)
-        buf.name = name_hint
-        return buf
-    # Sometimes captured as text
-    if isinstance(obj, str):
-        buf = io.BytesIO(obj.encode("utf-8"))
-        buf.name = name_hint
-        return buf
-    # Already a file-like (e.g., UploadedFile or BytesIO)
-    if hasattr(obj, "read"):
-        try:
-            # give it a name if missing
-            if not getattr(obj, "name", ""):
-                obj.name = name_hint
-            obj.seek(0)
-        except Exception:
-            pass
-        return obj
-    return None
-
-# (1) From ZIP (if present)
-full_from_zip = _to_filelike_csv(replay_inputs.get("full_city"))
-
-# (2) Manual uploader (fallback / override)
-st.sidebar.header("Launch Locations — Full City (optional)")
-full_juris_file_manual = st.sidebar.file_uploader(
-    "Upload Launch Locations - Full City CSV",
-    type=["csv"],
-    key="launch_csv_full_juris"
-)
-
-# (3) Final source: manual wins, else ZIP; if neither → hide the whole section
-full_juris_file = full_juris_file_manual or full_from_zip
-
-if full_juris_file:
-    st.markdown("---")
-    st.header("Comparison — Full City")
-
-    # Keep your existing Full City logic from here down:
+# (3) Only render the Full City section if we actually have a file
+if full_city_file:
     try:
-        full_juris_file.seek(0)
+        full_city_file.seek(0)
     except Exception:
         pass
 
-    fj_df, _, _ = _load_launch_locations_csv(full_juris_file)
-    # ... (rest of your current Full City code: validate, compute costs, build polygons, panels, etc.)
-else:
-    # No Full City CSV available from either source → render nothing.
-    pass
+    st.markdown("---")
+    st.header("Comparison — Full City")
+
+    fj_df, _, _ = _load_launch_locations_csv(full_city_file)
+    # ... your existing Full City logic (coords, pricing, polygons, panels, etc.) ...
         
     fj_df, _, _ = _load_launch_locations_csv(full_juris_file)
     fj_df.columns = [c.strip() for c in fj_df.columns]
