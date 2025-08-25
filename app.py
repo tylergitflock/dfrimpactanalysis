@@ -1593,7 +1593,7 @@ else:
 def render_map(
     df_pts,
     heat=False,
-    title="",
+    title=None,                # ← default None (not empty string)
     key=None,
     heat_radius=15,
     heat_blur=25,
@@ -1601,9 +1601,11 @@ def render_map(
     launch_coords=None,
     hotspot_center=None,
     hotspot_radius=None,
-    geojson_overlays=None,          # ← NEW
+    geojson_overlays=None,
 ):
-    st.subheader(title)
+    # Only render a title if one was actually provided
+    if title:
+        st.subheader(title)
 
     # drop NaNs so folium never errors
     if {"lat","lon"}.issubset(df_pts.columns):
@@ -2555,7 +2557,6 @@ def panel(title, product_names_list, is_left=True, competitor=None):
                 df_all,
                 heat=True,
                 heat_radius=8, heat_blur=12,
-                title="",
                 key=f"cmp_map_L_{title}",
                 show_circle=True,
                 launch_coords=launch_coords,
@@ -2757,6 +2758,7 @@ else:
     )
 
     # Panels
+
     def panel_full_left(title, coords, docks, yearly_cost):
         with st.container(border=True):
             st.subheader(title)
@@ -2773,6 +2775,36 @@ else:
             c1.metric("Required Locations", f"{len(coords):,}")
             c2.metric("Total Docks", f"{int(docks):,}")
             c3.metric("Yearly Cost", f"${int(yearly_cost):,}")
+    
+            # --- Aerodome Specs (LEFT side, Full City) ---
+            def _render_specs_block(pname: str):
+                specs = PLATFORMS.get(pname, {}).get("specs", {})
+                if not specs:
+                    return
+                rows = [
+                    "Pricing / Dock / Year (2-Year Contract)",
+                    "Number of Docks / Location",
+                    "Real-world Speed (MPH)",
+                    "Response Time (1 Mile) (sec)",
+                    "Real-world On-scene Time (min)",
+                    "Hit License Plate at 400ft Alt",
+                    "Effectively Fly at 400ft Alt",
+                    "Night Vision",
+                    "Integrations",
+                ]
+                st.markdown("**Specs**")
+                for r in rows:
+                    if r in specs:
+                        st.write(f"**{r}**: {specs[r]}")
+    
+            if is_multi:
+                st.markdown("**Detected Aerodome Platforms:** " + ", ".join(detected_types_list))
+                for p in detected_types_list:
+                    st.markdown(f"**{p}**")
+                    _render_specs_block(p)
+            else:
+                if detected_types_list:
+                    _render_specs_block(detected_types_list[0])
 
     def panel_full_right(competitor):
         with st.container(border=True):
@@ -2850,6 +2882,12 @@ else:
                         if r in specs:
                             st.write(f"**{r}**: {specs[r]}")
 
+    # Put the competitor selector above the two panels
+    comp_choice_fc = st.selectbox(
+        "Compare against (Full City)",
+        COMPETITOR_OPTIONS, index=0, key="cmp_choice_fullcity"
+    )
+    
     FC_L, FC_R = st.columns(2)
     with FC_L:
         panel_full_left(
@@ -2859,11 +2897,9 @@ else:
             yearly_cost=our_full_base
         )
     with FC_R:
-        comp_choice_fc = st.selectbox(
-            "Compare against (Full City)",
-            COMPETITOR_OPTIONS, index=0, key="cmp_choice_fullcity"
-        )
         panel_full_right(competitor=comp_choice_fc)
+
+st.markdown("---")
 
 
 # ─── REPORT VALUES + EXPORTS (collapsed at bottom) ───────────────────────────
