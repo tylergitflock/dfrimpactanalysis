@@ -1458,18 +1458,6 @@ if audit_on:
         "ROI": roi,
     })
 
-# ─── 5) CSV DOWNLOADS ────────────────────────────────────────────────────────
-st.subheader("Agency CSV Exports")
-cols = ["lat","lon","patrol_sec","drone_eta_sec","onscene_sec","priority","call_type_up"]
-c1,c2,c3 = st.columns(3)
-with c1:
-    st.download_button("Download DFR Only", to_csv_bytes(dfr_only[cols]), "dfr_only.csv")
-with c2:
-    st.download_button("Download In Range", to_csv_bytes(in_range[cols]), "in_range.csv")
-with c3:
-    st.download_button("Download Clearable", to_csv_bytes(clearable[cols]), "clearable.csv")
-progress.progress(100)
-
 # ─── 5.5) TOP SUMMARY (matches PDF headline metrics) ─────────────────────────
 st.markdown("---")
 st.markdown("### Summary")
