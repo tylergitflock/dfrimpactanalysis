@@ -1962,6 +1962,54 @@ import alphashape
 
 SQM_PER_SQMI = 2_589_988.110336
 
+def _extract_full_city_from_any_session_zip():
+    """
+    Look through st.session_state for any ZIP bytes and try to load
+    a CSV whose filename starts with 'Launch Locations - Full City'.
+    Returns a DataFrame or None.
+    """
+    prefix = "launch locations - full city"
+    try:
+        import streamlit as st  # already imported, but safe
+    except Exception:
+        return None
+
+    for k, v in list(st.session_state.items()):
+        data = None
+        # Common patterns: raw bytes, UploadedFile-like, or stored zip bytes
+        if isinstance(v, (bytes, bytearray)):
+            data = bytes(v)
+        elif hasattr(v, "getvalue"):
+            try:
+                data = v.getvalue()
+            except Exception:
+                data = None
+
+        if not data:
+            continue
+
+        # Try to open as a ZIP and find our CSV by prefix
+        try:
+            with zipfile.ZipFile(io.BytesIO(data)) as zf:
+                name = next(
+                    (
+                        n for n in zf.namelist()
+                        if n.lower().endswith(".csv")
+                        and n.split("/")[-1].lower().startswith(prefix)
+                    ),
+                    None
+                )
+                if name:
+                    with zf.open(name) as fh:
+                        # Reuse your existing CSV loader so columns/cleanups match
+                        df, _, _ = _load_launch_locations_csv(fh)
+                        return df
+        except Exception:
+            # Not a ZIP or not the right file; skip
+            continue
+
+    return None
+
 # ---------- UTM helpers ----------
 def _utm_epsg_for(lat_deg: float, lon_deg: float) -> int:
     zone = int((lon_deg + 180) // 6) + 1
@@ -2671,13 +2719,40 @@ with R:
     panel(comp_choice, [], is_left=False, competitor=comp_choice)
 
 
-# ─── Comparison — Full City (only render if CSV uploaded) ────────────────────
+# ─── Comparison — Full City (same logic as normal) ───────────────────────────
+# Sidebar uploader stays visible (so users can add it later)
 st.sidebar.header("Launch Locations — Full Juris (optional)")
 full_juris_file = st.sidebar.file_uploader(
     "Upload Launch Locations - Full Juris CSV",
     type=["csv"],
     key="launch_csv_full_juris"
 )
+
+# Try to use an already-extracted Full City DF from session (if any),
+# otherwise search through any uploaded master ZIP stored in session.
+fc_df_session = st.session_state.get("full_city_df")
+if fc_df_session is None:
+    _fc_autoload = _extract_full_city_from_any_session_zip()
+    if _fc_autoload is not None:
+        st.session_state["full_city_df"] = _fc_autoload
+        fc_df_session = _fc_autoload
+
+# Decide what we have for Full City input:
+_fj_df_source = None
+if full_juris_file is not None:
+    _fj_df_source = "upload"
+elif fc_df_session is not None:
+    _fj_df_source = "session"
+
+# Only render the Full City section if we actually have data
+if _fj_df_source is not None:
+    st.markdown("---")
+    st.header("Comparison — Full City")
+
+    if _fj_df_source == "upload":
+        fj_df, _, _ = _load_launch_locations_csv(full_juris_file)
+    else:
+        fj_df = fc_df_session
 
 if full_juris_file:
     st.markdown("---")
