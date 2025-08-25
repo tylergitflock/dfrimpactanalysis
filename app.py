@@ -2721,14 +2721,41 @@ with R:
 
 
 # ─── Comparison — Full City (render ONLY if CSV present from ZIP or manual) ──
+import io
+
+# Make sure replay_inputs["full_city"] is populated from the ZIP (if any)
+if replay_inputs.get("full_city") is None:
+    # pulls from st.session_state["zip_files"] using a partial match
+    replay_inputs["full_city"] = _find_csv_by_partial("Launch Locations - Full City")
+
+def _to_filelike_csv(obj, name_hint="Launch Locations - Full City.csv"):
+    """Return a file-like BytesIO for CSV content, or None if not possible."""
+    if obj is None:
+        return None
+    # Already a bytes-like blob from the ZIP
+    if isinstance(obj, (bytes, bytearray)):
+        buf = io.BytesIO(obj)
+        buf.name = name_hint
+        return buf
+    # Sometimes captured as text
+    if isinstance(obj, str):
+        buf = io.BytesIO(obj.encode("utf-8"))
+        buf.name = name_hint
+        return buf
+    # Already a file-like (e.g., UploadedFile or BytesIO)
+    if hasattr(obj, "read"):
+        try:
+            # give it a name if missing
+            if not getattr(obj, "name", ""):
+                obj.name = name_hint
+            obj.seek(0)
+        except Exception:
+            pass
+        return obj
+    return None
 
 # (1) From ZIP (if present)
-full_zip_bytes = replay_inputs.get("full_city")
-full_from_zip = None
-if full_zip_bytes:
-    buf = io.BytesIO(full_zip_bytes)
-    buf.name = "Launch Locations - Full City (from ZIP).csv"
-    full_from_zip = buf  # file-like
+full_from_zip = _to_filelike_csv(replay_inputs.get("full_city"))
 
 # (2) Manual uploader (fallback / override)
 st.sidebar.header("Launch Locations — Full City (optional)")
@@ -2744,9 +2771,17 @@ full_juris_file = full_juris_file_manual or full_from_zip
 if full_juris_file:
     st.markdown("---")
     st.header("Comparison — Full City")
-    # ↓ keep ALL your existing Full City code from here down (seek, _load_launch_locations_csv, panels, etc.)
+
+    # Keep your existing Full City logic from here down:
+    try:
+        full_juris_file.seek(0)
+    except Exception:
+        pass
+
+    fj_df, _, _ = _load_launch_locations_csv(full_juris_file)
+    # ... (rest of your current Full City code: validate, compute costs, build polygons, panels, etc.)
 else:
-    # Nothing to do; do not render this section at all.
+    # No Full City CSV available from either source → render nothing.
     pass
         
     fj_df, _, _ = _load_launch_locations_csv(full_juris_file)
