@@ -1222,8 +1222,6 @@ report_df = pd.DataFrame({
     "Metric": [r[0] for r in rows],
     "Result": [pretty_value(r[1],r[2]) for r in rows],
 })
-st.subheader("Report Values")
-st.dataframe(report_df, use_container_width=True)
 
 
 
