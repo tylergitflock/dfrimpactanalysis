@@ -2523,7 +2523,6 @@ def place_sites_kmeans_in_polygon(lat, lon, polygon_utm, n_sites, fwd: Transform
     lat_c, lon_c = _unproject_points(inv, cx, cy)
     return list(zip(lat_c.tolist(), lon_c.tolist()))
 
-# ---------------- Panel renderer (unchanged other than using TARGET_AREA_SQMI) ----------
 # ---------------- Panel renderer (tidy: no duplicate specs, no extra separators) ----------
 def panel(title, product_names_list, is_left=True, competitor=None):
     with st.container(border=True):
@@ -2643,6 +2642,25 @@ def panel(title, product_names_list, is_left=True, competitor=None):
                 f"Per-location area: {plan['per_location_area_sqmi']:.2f} sq mi • "
                 f"Radius: {comp_range_mi:.2f} mi"
             )
+                        # --- Competitor Specs (RIGHT side) ---
+            if competitor in PLATFORMS:
+                specs = PLATFORMS[competitor].get("specs", {})
+                rows = [
+                    "Pricing / Dock / Year (2-Year Contract)",
+                    "Number of Docks / Location",
+                    "Real-world Speed (MPH)",
+                    "Response Time (1 Mile) (sec)",
+                    "Real-world On-scene Time (min)",
+                    "Hit License Plate at 400ft Alt",
+                    "Effectively Fly at 400ft Alt",
+                    "Night Vision",
+                    "Integrations",
+                ]
+                if specs:
+                    st.markdown("**Specs**")
+                    for r in rows:
+                        if r in specs:
+                            st.write(f"**{r}**: {specs[r]}")
 
 # ---- Controls row + two panels (unchanged) ----------------------------------
 topL, topR = st.columns([3, 2])
@@ -2812,6 +2830,25 @@ else:
                 f"Per-location area: {plan['per_location_area_sqmi']:.2f} sq mi • "
                 f"Radius: {comp_range_mi:.2f} mi"
             )
+                        # --- Competitor Specs (RIGHT side, Full City) ---
+            if competitor in PLATFORMS:
+                specs = PLATFORMS[competitor].get("specs", {})
+                rows = [
+                    "Pricing / Dock / Year (2-Year Contract)",
+                    "Number of Docks / Location",
+                    "Real-world Speed (MPH)",
+                    "Response Time (1 Mile) (sec)",
+                    "Real-world On-scene Time (min)",
+                    "Hit License Plate at 400ft Alt",
+                    "Effectively Fly at 400ft Alt",
+                    "Night Vision",
+                    "Integrations",
+                ]
+                if specs:
+                    st.markdown("**Specs**")
+                    for r in rows:
+                        if r in specs:
+                            st.write(f"**{r}**: {specs[r]}")
 
     FC_L, FC_R = st.columns(2)
     with FC_L:
