@@ -1461,7 +1461,7 @@ if audit_on:
     })
 
 # ─── 5) CSV DOWNLOADS ────────────────────────────────────────────────────────
-st.subheader("ESRI CSV Exports")
+st.subheader("Agency CSV Exports")
 cols = ["lat","lon","patrol_sec","drone_eta_sec","onscene_sec","priority","call_type_up"]
 c1,c2,c3 = st.columns(3)
 with c1:
@@ -2870,3 +2870,19 @@ else:
             COMPETITOR_OPTIONS, index=0, key="cmp_choice_fullcity"
         )
         panel_full_right(competitor=comp_choice_fc)
+
+
+# ─── REPORT VALUES + EXPORTS (collapsed at bottom) ───────────────────────────
+with st.expander("📊 Report Values & Exports", expanded=False):
+    st.subheader("Report Values")
+    st.dataframe(report_df, use_container_width=True)
+
+    st.subheader("ESRI CSV Exports")
+    cols = ["lat","lon","patrol_sec","drone_eta_sec","onscene_sec","priority","call_type_up"]
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.download_button("Download DFR Only", to_csv_bytes(dfr_only[cols]), "dfr_only.csv")
+    with c2:
+        st.download_button("Download In Range", to_csv_bytes(in_range[cols]), "in_range.csv")
+    with c3:
+        st.download_button("Download Clearable", to_csv_bytes(clearable[cols]), "clearable.csv")
