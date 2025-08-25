@@ -2524,11 +2524,31 @@ def place_sites_kmeans_in_polygon(lat, lon, polygon_utm, n_sites, fwd: Transform
     return list(zip(lat_c.tolist(), lon_c.tolist()))
 
 # ---------------- Panel renderer (unchanged other than using TARGET_AREA_SQMI) ----------
+# ---------------- Panel renderer (tidy: no duplicate specs, no extra separators) ----------
 def panel(title, product_names_list, is_left=True, competitor=None):
     with st.container(border=True):
-        # Keep a tight header — no captions/extra text to avoid white space
         if title:
-            st.subheader(title)
+            st.subheader(title)  # keep header; no extra markdown dividers
+
+        # helper to render one compact specs block (used only on the LEFT)
+        def _render_specs_block(pnames: list[str]):
+            rows = [
+                "Pricing / Dock / Year (2-Year Contract)",
+                "Number of Docks / Location",
+                "Real-world Speed (MPH)",
+                "Response Time (1 Mile) (sec)",
+                "Real-world On-scene Time (min)",
+                "Hit License Plate at 400ft Alt",
+                "Effectively Fly at 400ft Alt",
+                "Night Vision",
+                "Integrations",
+            ]
+            for pname in pnames:
+                specs = PLATFORMS[pname]["specs"]
+                st.markdown(f"**{pname}**")
+                for r in rows:
+                    if r in specs:
+                        st.write(f"**{r}**: {specs[r]}")
 
         if is_left:
             # LEFT: our calls heat + blue coverage + FAA
@@ -2536,14 +2556,14 @@ def panel(title, product_names_list, is_left=True, competitor=None):
                 df_all,
                 heat=True,
                 heat_radius=8, heat_blur=12,
-                title="",                    # no inner title → no extra gap
+                title="",
                 key=f"cmp_map_L_{title}",
                 show_circle=True,
                 launch_coords=launch_coords,
                 geojson_overlays=[("FAA Grid", FAA_GEOJSON)] if FAA_GEOJSON else None,
             )
 
-            # ✅ Always show Aerodome headline metrics on the left
+            # Headline metrics (ours)
             _our_locs  = len(launch_rows)
             _our_docks = int(pd.to_numeric(docks_col, errors="coerce").fillna(0).sum()) if docks_col is not None else 0
             _our_cost  = our_base
@@ -2552,32 +2572,12 @@ def panel(title, product_names_list, is_left=True, competitor=None):
             c2.metric("Total Docks", f"{_our_docks:,}")
             c3.metric("Yearly Cost", f"${_our_cost:,}")
 
-            # Specs block (unchanged)
-            def render_specs(pname: str):
-                specs = PLATFORMS[pname]["specs"]
-                for r in [
-                    "Pricing / Dock / Year (2-Year Contract)",
-                    "Number of Docks / Location",
-                    "Real-world Speed (MPH)",
-                    "Response Time (1 Mile) (sec)",
-                    "Real-world On-scene Time (min)",
-                    "Hit License Plate at 400ft Alt",
-                    "Effectively Fly at 400ft Alt",
-                    "Night Vision",
-                    "Integrations",
-                ]:
-                    if r in specs:
-                        st.write(f"**{r}**: {specs[r]}")
-
+            # Specs — render ONCE on the left, compact (no extra separators)
             if is_multi:
                 st.markdown("**Detected Aerodome Platforms:** " + ", ".join(detected_types_list))
-                for p in detected_types_list:
-                    st.markdown(f"**{p}**")
-                    render_specs(p)
-                    st.markdown("---")
-            else:
-                if product_names_list:
-                    render_specs(product_names_list[0])
+                _render_specs_block(detected_types_list)
+            elif product_names_list:
+                _render_specs_block(product_names_list[:1])
 
         else:
             # RIGHT: competitor — use unified TARGET_AREA_SQMI + PLACEMENT_POLY_UTM
@@ -2587,6 +2587,8 @@ def panel(title, product_names_list, is_left=True, competitor=None):
 
             fwd = fwd_calls if fwd_calls else _make_transformers(df_all["lat"].values, df_all["lon"].values)[0]
             inv = inv_calls if inv_calls else _make_transformers(df_all["lat"].values, df_all["lon"].values)[1]
+
+            # centers via hex grid; fallback to KMeans
             centers = place_sites_hex_in_polygon(
                 PLACEMENT_POLY_UTM, n_sites=required_locs, range_mi=comp_range_mi,
                 fwd=fwd, inv=inv
@@ -2622,7 +2624,7 @@ def panel(title, product_names_list, is_left=True, competitor=None):
             for la, lo in launch_coords:
                 folium.Circle(location=(la, lo), radius=our_eff_range * 1609.34, color="blue", weight=2, fill=False, opacity=0.35).add_to(m)
 
-            # Outline (purple) of whichever polygon is active
+            # Outline (purple) of active polygon (kept on for now; can later add toggle)
             outline_latlon = polygon_outline_latlon(PLACEMENT_POLY_UTM, inv_calls)
             if outline_latlon:
                 folium.PolyLine(locations=[(lt, ln) for lt, ln in outline_latlon],
@@ -2633,7 +2635,7 @@ def panel(title, product_names_list, is_left=True, competitor=None):
 
             st_folium(m, width=800, height=500, key=f"cmp_map_R_{competitor}")
 
-            # Headline metrics
+            # Headline metrics (competitor)
             comp_docks_per_loc = PLATFORMS[competitor]["docks_per_location"]
             total_comp_docks = required_locs * comp_docks_per_loc
             c1, c2, c3 = st.columns(3)
@@ -2859,11 +2861,12 @@ else:
 
 
 # ─── REPORT VALUES + EXPORTS (collapsed at bottom) ───────────────────────────
+st.header("Report & CSV Exports")
 with st.expander("📊 Report Values & Exports", expanded=False):
     st.subheader("Report Values")
     st.dataframe(report_df, use_container_width=True)
 
-    st.subheader("ESRI CSV Exports")
+    st.subheader("CSV Exports")
     cols = ["lat","lon","patrol_sec","drone_eta_sec","onscene_sec","priority","call_type_up"]
     c1, c2, c3 = st.columns(3)
     with c1:
