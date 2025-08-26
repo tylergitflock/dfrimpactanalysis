@@ -857,25 +857,19 @@ if hotspot_address:
     else:
         st.sidebar.warning("Could not geocode that address. Enter lat/lon manually if needed.")
 
-# === Full City (Launch Locations — Full Juris) ===
-fc_src = None
+# === Full City Launch Locations ===
+full_city_src = None
 full_city_file = None
 
-# If the master ZIP pre-populated it, use that
 if replay_inputs.get("full_city"):
-    full_city_file = replay_inputs["full_city"]   # bytes-like or file-like
-    fc_src = "replay"
+    full_city_file = replay_inputs["full_city"]   # may be bytes or file-like
+    full_city_src = "replay"
 else:
-    # Otherwise let the user upload manually (same pattern as ALPR/Audio)
-    full_city_file = st.sidebar.file_uploader(
-        "Upload Launch Locations - Full City CSV",
-        type=["csv"],
-        key="launch_csv_full_juris"
-    )
-    fc_src = "upload" if full_city_file else None
+    full_city_file = st.sidebar.file_uploader("Upload Launch Locations - Full City CSV", type=["csv"])
+    full_city_src = "upload" if full_city_file else None
 
-if fc_src == "replay":
-    st.sidebar.success("Loaded Full City CSV from ZIP.")
+if full_city_src == "replay":
+    st.sidebar.success("Loaded Full City CSV from saved run.")
 
 # Normalize bytes → file-like so your CSV loader works with either source
 import io
@@ -2748,42 +2742,22 @@ with R:
     panel(comp_choice, [], is_left=False, competitor=comp_choice)
 
 
-# ─── Comparison — Full City (same logic as ALPR/Audio) ──────────────────────
-fc_src = None
-full_city_file = None
-
-# (1) If the master ZIP pre-populated it, use that
-if replay_inputs.get("full_city"):
-    full_city_file = replay_inputs["full_city"]
-    fc_src = "replay"
-else:
-    # (2) Otherwise let the user upload manually
-    full_city_file = st.sidebar.file_uploader(
-        "Upload Launch Locations - Full City CSV",
-        type=["csv"],
-        key="launch_csv_full_juris"
-    )
-    fc_src = "upload" if full_city_file else None
-
-if fc_src == "replay":
-    st.sidebar.success("Loaded Full City CSV from ZIP.")
-
-# normalize to file-like if bytes
-import io
-if isinstance(full_city_file, (bytes, bytearray)):
-    buf = io.BytesIO(full_city_file)
-    buf.name = "Launch Locations - Full City.csv"
-    full_city_file = buf
-
-# (3) Only render the Full City section if we actually have a file
+# ─── Comparison — Full City (only render if CSV present) ────────────────────
 if full_city_file:
-    try:
-        full_city_file.seek(0)
-    except Exception:
-        pass
-
     st.markdown("---")
     st.header("Comparison — Full City")
+
+    # If it came from ZIP as raw bytes, wrap in BytesIO so _load_launch_locations_csv can read it
+    import io
+    if isinstance(full_city_file, (bytes, bytearray)):
+        buf = io.BytesIO(full_city_file)
+        buf.name = "Launch Locations - Full City.csv"   # give it a name for any downstream code
+        full_city_file = buf
+    else:
+        try:
+            full_city_file.seek(0)  # UploadedFile/BytesIO safety
+        except Exception:
+            pass
 
     fj_df, _, _ = _load_launch_locations_csv(full_city_file)
     # ... your existing Full City logic (coords, pricing, polygons, panels, etc.) ...
