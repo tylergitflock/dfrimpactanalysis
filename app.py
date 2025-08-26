@@ -858,6 +858,8 @@ if hotspot_address:
         st.sidebar.warning("Could not geocode that address. Enter lat/lon manually if needed.")
 
 # === Full City Launch Locations ===
+st.sidebar.header("7) Full City Launch Locations (optional)")
+
 full_city_src = None
 full_city_file = None
 
@@ -870,6 +872,8 @@ else:
 
 if full_city_src == "replay":
     st.sidebar.success("Loaded Full City CSV from saved run.")
+elif full_city_src == "upload":
+    st.sidebar.info("Using uploaded Full City CSV.")
 
 # Normalize bytes → file-like so your CSV loader works with either source
 import io
