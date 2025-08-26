@@ -2962,7 +2962,7 @@ if full_city_file:
     with FC_R:
         panel_full_right(competitor=comp_choice_fc)
 
-    st.markdown("---")
+st.markdown("---")
 
 
 # ─── REPORT VALUES + EXPORTS (collapsed at bottom) ───────────────────────────
