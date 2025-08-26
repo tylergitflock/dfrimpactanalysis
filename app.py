@@ -2766,7 +2766,6 @@ if full_city_file:
         st.session_state.get("city_area_sqmi") or 0.0
     ) or float(CALLS_AREA_SQMI or 0.0)
 
-# If no full_city_file: render nothing for this section (no header)
     if "Location Name" not in fj_df.columns and "Locations" in fj_df.columns:
         fj_df.rename(columns={"Locations": "Location Name"}, inplace=True)
     if "Lon" not in fj_df.columns and "Long" in fj_df.columns:
@@ -2963,7 +2962,7 @@ if full_city_file:
     with FC_R:
         panel_full_right(competitor=comp_choice_fc)
 
-st.markdown("---")
+    st.markdown("---")
 
 
 # ─── REPORT VALUES + EXPORTS (collapsed at bottom) ───────────────────────────
