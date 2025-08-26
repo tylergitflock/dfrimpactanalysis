@@ -59,7 +59,7 @@ def load_esri_geojson(layer_url: str, bbox=None, out_sr=4326):
     return r.json()
 
 # ─── Page Setup (must be first Streamlit call) ───────────────────────────────
-st.set_page_config(page_title="DFR Impact Analysis", layout="wide")
+st.set_page_config(page_title="DFR Impact Analys", layout="wide")
 
 # Optional: tz for local timestamps (comment out if unavailable)
 try:
