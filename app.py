@@ -2747,7 +2747,6 @@ if full_city_file:
     st.markdown("---")
     st.header("Comparison — Full City")
 
-    # Normalize to a readable buffer
     import io
     if isinstance(full_city_file, (bytes, bytearray)):
         buf = io.BytesIO(full_city_file)
@@ -2758,8 +2757,14 @@ if full_city_file:
             full_city_file.seek(0)
         except Exception:
             pass
+
     fj_df, _, _ = _load_launch_locations_csv(full_city_file)
     fj_df.columns = [c.strip() for c in fj_df.columns]
+
+    # ✅ Define FULL_CITY_AREA here so later code can use it
+    FULL_CITY_AREA = float(
+        st.session_state.get("city_area_sqmi") or 0.0
+    ) or float(CALLS_AREA_SQMI or 0.0)
 
 # If no full_city_file: render nothing for this section (no header)
     if "Location Name" not in fj_df.columns and "Locations" in fj_df.columns:
