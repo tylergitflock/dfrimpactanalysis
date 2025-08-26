@@ -2747,23 +2747,21 @@ if full_city_file:
     st.markdown("---")
     st.header("Comparison — Full City")
 
-    # If it came from ZIP as raw bytes, wrap in BytesIO so _load_launch_locations_csv can read it
+    # Normalize to a readable buffer
     import io
     if isinstance(full_city_file, (bytes, bytearray)):
         buf = io.BytesIO(full_city_file)
-        buf.name = "Launch Locations - Full City.csv"   # give it a name for any downstream code
+        buf.name = "Launch Locations - Full City.csv"
         full_city_file = buf
     else:
         try:
-            full_city_file.seek(0)  # UploadedFile/BytesIO safety
+            full_city_file.seek(0)
         except Exception:
             pass
-
     fj_df, _, _ = _load_launch_locations_csv(full_city_file)
-    # ... your existing Full City logic (coords, pricing, polygons, panels, etc.) ...
-        
-    fj_df, _, _ = _load_launch_locations_csv(full_juris_file)
     fj_df.columns = [c.strip() for c in fj_df.columns]
+
+# If no full_city_file: render nothing for this section (no header)
     if "Location Name" not in fj_df.columns and "Locations" in fj_df.columns:
         fj_df.rename(columns={"Locations": "Location Name"}, inplace=True)
     if "Lon" not in fj_df.columns and "Long" in fj_df.columns:
