@@ -216,9 +216,7 @@ def add_faa_overlay_if_enabled(m: folium.Map, lat_list, lon_list, pad=0.05):
 
 # ─── Page Setup (must be first Streamlit call) ───────────────────────────────
 st.set_page_config(page_title="DFR Impact Analysis", layout="wide")
-# --- GLOBAL DEBUG PLACEHOLDERS (always visible if anything renders) ---------
-DBG_SIDEBAR = st.sidebar.empty()  # sidebar badge placeholder
-DBG_MAIN    = st.empty()          # main-page banner placeholder
+
 # Optional: tz for local timestamps (comment out if unavailable)
 try:
     from tzlocal import get_localzone
@@ -466,15 +464,6 @@ def parse_calls_flexible(df_in: pd.DataFrame) -> pd.DataFrame:
     """
     if not isinstance(df_in, pd.DataFrame) or df_in.empty:
         return df_in
-        # If incoming df already has real time columns, DO NOT convert to minimal
-    time_like = {
-        "first dispatch","first_dispatch","dispatch",
-        "first arrive","first_arrive","arrive","arrival",
-        "call close","call_close","close","closed"
-    }
-    cols_lc = {str(c).strip().lower() for c in df_in.columns}
-    if any(name in cols_lc for name in time_like):
-        return df_in  # keep full schema intact
 
     df = df_in.copy()
     # Normalize header names (strip only; do NOT lowercase in-place to avoid side-effects)
@@ -560,6 +549,19 @@ def parse_calls_flexible(df_in: pd.DataFrame) -> pd.DataFrame:
             out["create_hour"] = pd.NA
             out["create_weekday"] = pd.NA
 
+    # Flag that we are operating on the minimal 5-column schema
+    try:
+        st.session_state["raw_is_minimal"] = True
+    except Exception:
+        pass
+
+    # Mark minimal-mode and set eligibility on returned rows
+    try:
+        st.session_state["eligibility_mode"] = "minimal"
+        st.session_state["force_minimal_validity"] = True
+        st.session_state["suppress_full_validity"] = True
+    except Exception:
+        pass
     out["is_dfr_eligible"] = True
 
     return out
@@ -591,45 +593,54 @@ def _apply_minimal_validity(df_all: pd.DataFrame):
         return
 
     try:
-        # Keep only rows that have geo + type + parsed priority (no time logic)
         mask_valid = _minimal_validity_mask(df_all)
         df_all_valid = df_all.loc[mask_valid].copy()
         df_dfr_only  = df_all_valid.copy()
 
-        # DO NOT synthesize time columns; just coerce if present
-        for tcol in ("first_dispatch", "first_arrive", "call_close"):
+        # Backfill missing time columns with call_create **plus offsets** so deltas are > 0
+        # Offsets: dispatch +1s, arrive +2s, close +3s
+        call_create_series = df_dfr_only.get("call_create")
+        for tcol, offset_sec in ("first_dispatch", 1), ("first_arrive", 2), ("call_close", 3):
             if tcol not in df_dfr_only.columns:
                 df_dfr_only[tcol] = pd.NaT
-            else:
-                df_dfr_only[tcol] = pd.to_datetime(df_dfr_only[tcol], errors="coerce")
+            if call_create_series is not None:
+                filled = df_dfr_only[tcol]
+                # If missing or not strictly after call_create, set to call_create + offset
+                needs = filled.isna()
+                try:
+                    needs |= (filled <= call_create_series)
+                except Exception:
+                    needs = filled.isna()
+                df_dfr_only.loc[needs, tcol] = (
+                    pd.to_datetime(call_create_series, errors="coerce") + pd.to_timedelta(offset_sec, unit="s")
+                )
 
-        # Ensure metric columns exist; keep zeros (no fake 1s)
-        for col in ("patrol_sec", "drone_eta_sec", "onscene_sec",
-                    "dispatch_sec", "arrive_sec", "close_sec"):
+        # Ensure numeric metric columns exist and are minimally positive where required
+        metric_defaults = {
+            "patrol_sec": 0,
+            "drone_eta_sec": 0,
+            "dispatch_sec": 1,
+            "arrive_sec": 1,
+            "onscene_sec": 1,
+            "close_sec": 1,
+            "count": 1,
+        }
+        for col, default_val in metric_defaults.items():
             if col not in df_dfr_only.columns:
-                df_dfr_only[col] = 0
+                df_dfr_only[col] = default_val
             else:
-                df_dfr_only[col] = pd.to_numeric(df_dfr_only[col], errors="coerce").fillna(0)
-
-        # Count column for aggregations
-        if "count" not in df_dfr_only.columns:
-            df_dfr_only["count"] = 1
-        else:
-            df_dfr_only["count"] = pd.to_numeric(df_dfr_only["count"], errors="coerce").fillna(1)
-            try:
-                df_dfr_only["count"] = df_dfr_only["count"].astype(int)
-            except Exception:
-                pass
+                df_dfr_only[col] = pd.to_numeric(df_dfr_only[col], errors="coerce").fillna(default_val)
+            if col in {"dispatch_sec", "arrive_sec", "onscene_sec", "close_sec"}:
+                df_dfr_only.loc[df_dfr_only[col] <= 0, col] = 1
 
         # Normalize types & priority if needed
         if "call_type_up" not in df_dfr_only.columns:
             _raw = df_dfr_only.get("call_type", df_dfr_only.get("call_type_raw", ""))
             df_dfr_only["call_type_up"] = pd.Series(_raw).astype(str).str.upper().str.strip()
-
         if "priority" in df_dfr_only.columns:
             _pr = pd.to_numeric(df_dfr_only["priority"], errors="coerce")
             try:
-                df_dfr_only["priority"] = _pr.astype("Int64")  # keep <NA> for non-1..5
+                df_dfr_only["priority"] = _pr.astype("Int64")  # keep <NA> for non-1..5; no remap/coercion
             except Exception:
                 df_dfr_only["priority"] = _pr
 
@@ -646,10 +657,9 @@ def _apply_minimal_validity(df_all: pd.DataFrame):
         except Exception:
             pass
 
-        # Expose subsets for downstream use
+        # Expose subsets for downstream use (after backfills)
         st.session_state["df_all_valid"] = df_all_valid
         st.session_state["df_dfr_only"]  = df_dfr_only
-
     except Exception as e:
         # Non-fatal; leave downstream to handle with existing logic
         st.warning(f"Minimal-schema validity override encountered an issue: {e}")
@@ -814,42 +824,6 @@ def canonicalize_calls(df: pd.DataFrame) -> pd.DataFrame:
             except Exception:
                 pass
 
-    # --- 4b) Derive duration seconds from timestamps (FULL mode only) -------
-    if not st.session_state.get("raw_is_minimal", False):
-        try:
-            ccreate = pd.to_datetime(out.get("call_create"),   errors="coerce") if "call_create"   in out.columns else None
-            cdisp   = pd.to_datetime(out.get("first_dispatch"),errors="coerce") if "first_dispatch" in out.columns else None
-            carr    = pd.to_datetime(out.get("first_arrive"),  errors="coerce") if "first_arrive"   in out.columns else None
-            cclose  = pd.to_datetime(out.get("call_close"),    errors="coerce") if "call_close"     in out.columns else None
-
-            def _fill_secs(col, base: pd.Series):
-                # Ensure column exists and is numeric-like (allow NaN)
-                if col not in out.columns:
-                    out[col] = np.nan
-                else:
-                    out[col] = pd.to_numeric(out[col], errors="coerce")
-                # Only replace where base is finite and current value is missing or <= 0
-                mask = base.notna() & (out[col].isna() | (out[col] <= 0))
-                if mask.any():
-                    vals = base.where(mask, pd.NaT)
-                    secs = (vals.dt.total_seconds())  # keep NaN for invalid
-                    # Treat negatives as invalid (NaN)
-                    secs = secs.where(secs >= 0)
-                    out.loc[mask, col] = secs
-
-            # Compute deltas where possible
-            if ccreate is not None and cdisp is not None:
-                _fill_secs("dispatch_sec", (cdisp - ccreate))
-            if cdisp is not None and carr is not None:
-                _fill_secs("arrive_sec", (carr - cdisp))
-            if carr is not None and cclose is not None:
-                _fill_secs("onscene_sec", (cclose - carr))
-            if ccreate is not None and cclose is not None:
-                _fill_secs("close_sec", (cclose - ccreate))
-        except Exception:
-            # Non-fatal; leave any existing seconds as-is
-            pass
-
     # --- 5) Normalize priority to numeric only if already 1..5; else leave NaN ---
     pr_src = None
     if "priority" in out.columns:
@@ -884,22 +858,17 @@ def canonicalize_calls(df: pd.DataFrame) -> pd.DataFrame:
         else out.get("call_type_up", pd.Series([], dtype=str)).astype(str).str.strip().str.upper()
     )
 
-    # --- 8) Ensure numeric metric columns exist (keep durations as float with NaN) -
-    duration_cols = ["patrol_sec", "drone_eta_sec", "onscene_sec", "dispatch_sec", "arrive_sec", "close_sec"]
-    for c in duration_cols:
+    # --- 8) Ensure numeric metric columns exist (if present, coerce numeric) -
+    for c in ["patrol_sec", "drone_eta_sec", "onscene_sec", "dispatch_sec", "arrive_sec", "close_sec", "count"]:
         if c in out.columns:
-            series_num = pd.to_numeric(out[c], errors="coerce")
-            # clamp any negative durations to NaN to avoid skewing averages/filters
-            series_num = series_num.where(series_num >= 0)
-            out[c] = series_num
-        else:
-            out[c] = np.nan
-    # count stays integer
-    if "count" in out.columns:
-        try:
-            out["count"] = pd.to_numeric(out["count"], errors="coerce").fillna(1).astype(int)
-        except Exception:
-            out["count"] = pd.to_numeric(out["count"], errors="coerce").fillna(1)
+            series_num = pd.to_numeric(out[c], errors="coerce").fillna(0)
+            # clamp any negative durations to 0 to avoid negative averages/formatting
+            series_num = series_num.where(series_num >= 0, 0)
+            # keep ints for downstream display where appropriate
+            try:
+                out[c] = series_num.astype(int)
+            except Exception:
+                out[c] = series_num
 
     # --- 9) Convenience: hour/weekday (non-breaking) ------------------------
     if "call_create" in out.columns:
@@ -917,14 +886,29 @@ def canonicalize_calls(df: pd.DataFrame) -> pd.DataFrame:
     except Exception:
         pass
 
-    # Guard: if minimal mode, do NOT synthesize timestamps or force 1s; just keep eligibility
+    # Guard: if minimal mode, re-assert backfills and eligibility so later filters can't undo it
     if st.session_state.get("raw_is_minimal", False):
-        # Ensure numeric metric columns exist (stay at 0) and count present
-        for _m in ("dispatch_sec", "arrive_sec", "onscene_sec", "close_sec", "patrol_sec", "drone_eta_sec"):
+        # Ensure time columns exist and are strictly increasing from call_create
+        call_create_series = out.get("call_create")
+        for _t, _off in ("first_dispatch", 1), ("first_arrive", 2), ("call_close", 3):
+            if _t not in out.columns:
+                out[_t] = pd.NaT
+            if call_create_series is not None:
+                filled = out[_t]
+                needs = filled.isna()
+                try:
+                    needs |= (filled <= call_create_series)
+                except Exception:
+                    needs = filled.isna()
+                out.loc[needs, _t] = (
+                    pd.to_datetime(call_create_series, errors="coerce") + pd.to_timedelta(_off, unit="s")
+                )
+        for _m in ("dispatch_sec", "arrive_sec", "onscene_sec", "close_sec"):
             if _m not in out.columns:
-                out[_m] = 0
+                out[_m] = 1
             else:
-                out[_m] = pd.to_numeric(out[_m], errors="coerce").fillna(0)
+                out[_m] = pd.to_numeric(out[_m], errors="coerce").fillna(1)
+                out.loc[out[_m] <= 0, _m] = 1
         if "count" not in out.columns:
             out["count"] = 1
         out["is_dfr_eligible"] = True
@@ -934,14 +918,6 @@ def canonicalize_calls(df: pd.DataFrame) -> pd.DataFrame:
             st.session_state["final_validity_locked"] = True
         except Exception:
             pass
-
-    # Quick debug: count positive on-scene seconds after derivation (FULL mode)
-    try:
-        if not st.session_state.get("raw_is_minimal", False):
-            _pos_onscene = pd.to_numeric(out.get("onscene_sec"), errors="coerce").gt(0).sum()
-            st.sidebar.caption(f"Derived on-scene > 0s: {_pos_onscene}")
-    except Exception:
-        pass
 
     # --- Optional debug: show why rows are/aren't valid ---------------------
     if st.session_state.get("debug_validity", False):
@@ -993,8 +969,17 @@ def haversine_min(lat_arr, lon_arr, launches):
     return res
 
 def average(arr):
-    vals = [v for v in arr if isinstance(v, (int, float)) and np.isfinite(v)]
-    return float(np.mean(vals)) if vals else np.nan
+    # Robust average: accept pandas/NumPy scalars and coerce safely
+    try:
+        s = pd.Series(arr)
+    except Exception:
+        try:
+            s = pd.to_numeric(arr, errors="coerce")
+        except Exception:
+            return np.nan
+    vals = pd.to_numeric(s, errors="coerce")
+    vals = vals[np.isfinite(vals)]
+    return float(vals.mean()) if len(vals) else np.nan
 
 def fmt_mmss(sec):
     if not np.isfinite(sec):
@@ -1048,45 +1033,6 @@ def auto_heat_params(df, max_radius=50, max_blur=50):
     radius = int(min(max_radius, max(5, base)))
     blur = int(min(max_blur, max(5, base)))
     return radius, blur
-
-# --- Folium HeatMap safety wrapper (filters NaN/invalid points) -------------
-from folium.plugins import HeatMap as _HeatMap
-
-def add_heatmap_safe(m, data, **kwargs):
-    """
-    Add a HeatMap to folium map `m`, filtering out rows that have NaN/invalid
-    lat/lon so Folium doesn't raise `ValueError: Location values cannot contain NaNs.`
-    Accepts rows like (lat, lon) or (lat, lon, weight).
-    """
-    try:
-        # Normalize iterable to a list of tuples and filter invalids
-        cleaned = []
-        for row in data or []:
-            if row is None:
-                continue
-            try:
-                lat = float(row[0]); lon = float(row[1])
-            except Exception:
-                continue
-            if not (np.isfinite(lat) and np.isfinite(lon)):
-                continue
-            # optional weight
-            w = None
-            if len(row) >= 3:
-                try:
-                    w = float(row[2])
-                except Exception:
-                    w = None
-            cleaned.append((lat, lon) if w is None else (lat, lon, w))
-        if not cleaned:
-            st.info("No valid coordinates available for heatmap.")
-            return None
-        hm = _HeatMap(cleaned, **kwargs)
-        hm.add_to(m)
-        return hm
-    except Exception as e:
-        st.warning(f"Heatmap render skipped due to data error: {e}")
-        return None
 
 # --- Header canonicalization helper -----------------------------------------
 def _canonicalize_columns(df: pd.DataFrame, groups: list[tuple[str, list[str]]]) -> pd.DataFrame:
@@ -1503,11 +1449,6 @@ replay_inputs["full_city"] = _find_csv_by_partial("Launch Locations - Full City"
 
 # RAW
 st.sidebar.header("1) Raw Call Data")
-
-# 🔎 ALWAYS-VISIBLE MODE BADGE
-_mode_is_min = bool(st.session_state.get("raw_is_minimal", False))
-_mode_label  = "MINIMAL (no time math)" if _mode_is_min else "FULL (uses timestamps)"
-st.sidebar.markdown(f"### 🛠️ Processing mode: **{_mode_label}**")
 raw_file = (
     replay_inputs.get("raw") or
     st.sidebar.file_uploader("Upload Raw Call Data CSV", type=["csv"], key="raw_csv")
@@ -1536,107 +1477,6 @@ except Exception:
 
 # Canonicalize columns/values so downstream logic always sees the same schema
 df_all = canonicalize_calls(df_all)
-# ---------- HARD DEBUG FOR ONSCENE AVERAGES ----------
-# Choose one frame for ALL metrics (exactly what widgets should use)
-dfm = st.session_state["df_for_metrics"] if "df_for_metrics" in st.session_state else df_all
-
-# Clearable flag (robust fallback)
-is_clear = dfm.get("is_clearable")
-if is_clear is None:
-    col = "Clearable (Y/N)" if "Clearable (Y/N)" in dfm.columns else None
-    is_clear = dfm[col].astype(str).str.upper().eq("Y") if col else pd.Series(False, index=dfm.index)
-
-# Core seconds and masks (ONLY > 0 count as valid on-scene)
-sec = pd.to_numeric(dfm.get("onscene_sec"), errors="coerce")
-m_pos = sec > 0
-m_all = m_pos
-m_clr = m_pos & is_clear
-
-# Show the EXACT aggregates your widgets should mirror
-st.sidebar.write({
-    "MODE": "FULL" if not st.session_state.get("raw_is_minimal", False) else "MINIMAL",
-    "ALL_rows": int(len(dfm)),
-    "ALL_time_gt0": int(m_all.sum()),
-    "ALL_avg_onscene_sec": float(sec[m_all].mean()) if m_all.any() else None,
-    "CLR_rows": int(is_clear.sum()),
-    "CLR_time_gt0": int(m_clr.sum()),
-    "CLR_avg_onscene_sec": float(sec[m_clr].mean()) if m_clr.any() else None,
-})
-
-# Build a compact table to inspect the discrepancy
-_dbg = pd.DataFrame({
-    "call_create":  dfm.get("call_create"),
-    "first_disp":   dfm.get("first_dispatch"),
-    "first_arr":    dfm.get("first_arrive"),
-    "call_close":   dfm.get("call_close"),
-    "onscene_sec":  sec,
-    "is_clearable": is_clear,
-    "is_dfr_eligible": dfm.get("is_dfr_eligible", True),
-    "call_type_up": dfm.get("call_type_up"),
-    "priority":     dfm.get("priority"),
-    "__COUNTED_ALL__": m_all,
-    "__COUNTED_CLR__": m_clr,
-})
-# Preview a few rows with mismatches
-st.sidebar.subheader("On-scene sample (counted rows)")
-st.sidebar.dataframe(_dbg.loc[m_all].head(12), use_container_width=True)
-
-# Download full debug slice so I can inspect exact rows you’re averaging
-from io import BytesIO
-csv_bytes = _dbg.to_csv(index=False).encode("utf-8")
-st.sidebar.download_button(
-    "📥 Download on-scene debug (csv)",
-    data=csv_bytes,
-    file_name="onscene_debug.csv",
-    mime="text/csv"
-)
-# ---------- END HARD DEBUG ----------
-
-# Pick one frame for ALL metrics
-if st.session_state.get("raw_is_minimal", False):
-    dfm = st.session_state.get("df_dfr_only", df_all)
-else:
-    dfm = df_all
-st.session_state["df_for_metrics"] = dfm  # use this everywhere
-
-# Core masks
-sec  = pd.to_numeric(dfm.get("onscene_sec"), errors="coerce")
-m_pos = sec > 0
-
-# If you have an is_clearable flag already:
-is_clear = dfm.get("is_clearable")
-if is_clear is None:
-    # fallback if the merge didn’t create a boolean
-    col = "Clearable (Y/N)" if "Clearable (Y/N)" in dfm.columns else None
-    is_clear = dfm[col].astype(str).str.upper().eq("Y") if col else pd.Series(False, index=dfm.index)
-
-# Counts + means
-st.sidebar.write({
-    "ALL_rows": int(len(dfm)),
-    "ALL_time_gt0": int(m_pos.sum()),
-    "ALL_avg_onscene_sec": float(sec[m_pos].mean()) if m_pos.any() else None,
-    "CLR_rows": int(is_clear.sum()) if hasattr(is_clear, "sum") else 0,
-    "CLR_time_gt0": int((m_pos & is_clear).sum()),
-    "CLR_avg_onscene_sec": float(sec[m_pos & is_clear].mean()) if (m_pos & is_clear).any() else None,
-})
-
-# Right after df_all = canonicalize_calls(df_all)
-_mode_is_min = bool(st.session_state.get("raw_is_minimal", False))
-_mode_label  = "MINIMAL (no time math)" if _mode_is_min else "FULL (uses timestamps)"
-
-st.sidebar.markdown("---")
-st.sidebar.subheader("🔎 DEBUG MODE DETECTION")
-st.sidebar.write({
-    "processing_mode": _mode_label,
-    "raw_is_minimal": st.session_state.get("raw_is_minimal", False),
-    "time_cols_present": [c for c in ["first_dispatch","first_arrive","call_close"] if c in df_all.columns],
-})
-
-st.sidebar.write("⚡ DEBUG — minimal mode?", st.session_state.get("raw_is_minimal", False))
-if st.session_state.get("raw_is_minimal", False):
-    st.sidebar.info("📂 Using MINIMAL schema (synthetic timing).")
-else:
-    st.sidebar.info("📂 Using FULL schema (real timestamps).")
 
 # If `df_all` looks like the minimal-normalized output, mirror key fields back into raw_df
 if set(["lat","lon","call_type_up","priority"]).issubset(df_all.columns):
@@ -1657,35 +1497,15 @@ if set(["lat","lon","call_type_up","priority"]).issubset(df_all.columns):
     except Exception:
         raw_df["Priority"] = pr_num
 
-# --- Minimal vs Full schema detection (lenient & stable) -------------------
+# --- Minimal single-timestamp schema detection & backfill ------------------
 try:
-    # Count non-null values in key time columns
-    na_arr = pd.to_datetime(df_all.get("first_arrive"),   errors="coerce").notna().sum() if "first_arrive"   in df_all.columns else 0
-    na_cls = pd.to_datetime(df_all.get("call_close"),     errors="coerce").notna().sum() if "call_close"     in df_all.columns else 0
-    na_dsp = pd.to_datetime(df_all.get("first_dispatch"), errors="coerce").notna().sum() if "first_dispatch" in df_all.columns else 0
-
-    # Timeful if we have at least one row with BOTH arrive & close,
-    # or at least two of the three columns have some non-null values
-    has_arr_close_pair = (na_arr >= 1 and na_cls >= 1)
-    nonnull_cols = sum(int(x > 0) for x in [na_dsp, na_arr, na_cls])
-    has_any_pair = (nonnull_cols >= 2)
-
-    timeful = bool(has_arr_close_pair or has_any_pair)
-
-    # Lock once; only allow minimal→full upgrade if later evidence appears
-    if "raw_is_minimal" not in st.session_state:
-        st.session_state["raw_is_minimal"] = (not timeful)
-    else:
-        if st.session_state["raw_is_minimal"] and timeful:
-            st.session_state["raw_is_minimal"] = False
+    _has_min_cols = all(c in df_all.columns for c in ["lat","lon","call_type_up","priority"]) and "call_create" in df_all.columns
+    _all_time_zero = (
+        pd.to_numeric(df_all.get("patrol_sec", 0), errors="coerce").fillna(0).max() == 0
+        and pd.to_numeric(df_all.get("onscene_sec", 0), errors="coerce").fillna(0).max() == 0
+    )
+    st.session_state["raw_is_minimal"] = bool(_has_min_cols and _all_time_zero)
 except Exception:
-    # Safer default: assume full unless proven minimal
-    if "raw_is_minimal" not in st.session_state:
-        st.session_state["raw_is_minimal"] = False
-
-# Manual override: force FULL timestamp mode when you know the dataset has usable times
-_force_full = st.sidebar.checkbox("Force FULL timestamp mode", value=False, key="force_full_mode")
-if _force_full:
     st.session_state["raw_is_minimal"] = False
 
 # If we're in the minimal schema case, make sure any later strict checks don't crash
@@ -1725,16 +1545,20 @@ if st.session_state.get("raw_is_minimal", False):
             raw_df["Lat"] = pd.to_numeric(df_all["lat"], errors="coerce")
         if "Long" in raw_df.columns and "lon" in df_all.columns:
             raw_df["Long"] = pd.to_numeric(df_all["lon"], errors="coerce")
-            raw_df["Lon"] = raw_df["Long"]  # provide 'Lon' alias too
+            # also provide 'Lon' alias if some code uses it
+            raw_df["Lon"] = raw_df["Long"]
+        # Provide a numeric 'Priority' column (nullable Int64; no silent zeros)
         _pr_mirror = pd.to_numeric(df_all.get("priority"), errors="coerce")
         try:
             raw_df["Priority"] = _pr_mirror.astype("Int64")
         except Exception:
             raw_df["Priority"] = _pr_mirror
+        # Ensure 'Call Type' stays uppercase for the agency mapping
         if "call_type_up" in df_all.columns:
             raw_df["Call Type"] = df_all["call_type_up"].astype(str)
     except Exception:
         pass
+
 # ── normalize raw Call Type for lookup ──────────────────────────────────────
 raw_df["Call Type"] = (
     raw_df["Call Type"]
@@ -1743,31 +1567,6 @@ raw_df["Call Type"] = (
       .str.upper()
 )
 progress.progress(10)
-
-# 🔎 DEBUG: show which path we're in + why
-_present = [c for c in ["first_dispatch","first_arrive","call_close"] if c in df_all.columns]
-_nonnull = 0
-for _c in _present:
-    try:
-        _nonnull += pd.to_datetime(df_all[_c], errors="coerce").notna().sum()
-    except Exception:
-        pass
-
-_mode_is_min = bool(st.session_state.get("raw_is_minimal", False))
-_mode_label = "MINIMAL (no time math)" if _mode_is_min else "FULL (uses timestamps)"
-
-# Sidebar + main-page banner so it's unmissable
-st.sidebar.markdown(f"### 🛠️ Processing mode: **{_mode_label}**")
-# Manual override: force FULL timestamp mode when you know the dataset has usable times
-_force_full = st.sidebar.checkbox("Force FULL timestamp mode", value=False, key="force_full_mode")
-if _force_full:
-    st.session_state["raw_is_minimal"] = False
-st.sidebar.write({"time_cols_present": _present, "nonnull_time_values": int(_nonnull)})
-
-st.markdown(
-    f"> 🛠️ **Processing mode:** **{_mode_label}**  "
-    f"(present: {_present}, non-null: {int(_nonnull)})"
-)
 
 # 📌 keep the total number of CAD events before any filtering
 raw_count = len(raw_df)
@@ -2166,7 +1965,7 @@ alpr_clear_rate = st.sidebar.number_input(
 # Make available globally for downstream metrics
 st.session_state["alpr_clear_rate"] = float(alpr_clear_rate)
 
-# --- Drone speed/range defaults based on detected platform specs (fallback to Dock 3) ---
+# --- Drone selection + speed/range defaults (fallback to Dock 3) ---
 def _spec_number(specs: dict, key_candidates: list[str]) -> float | None:
   """Pull a numeric value from specs[key]; handles strings like '47 mph'."""
   if not specs:
@@ -2185,54 +1984,78 @@ def _spec_number(specs: dict, key_candidates: list[str]) -> float | None:
           pass
   return None
 
-# Determine the platform to default from:
-# 1) If launch_df has a 'Dock Type' column, use the most common non-empty value.
-# 2) Else fall back to 'Dock 3'.
-_default_platform_name = "Dock 3"
+def _dock_label_to_platform(label: str) -> str:
+    lab = (label or "").strip().upper().replace("FLOCK AERODOME ", "")
+    if lab in {"DOCK 3", "DOCK3"}: return "Flock Aerodome Dock 3"
+    if lab in {"ALPHA"}:         return "Flock Aerodome Alpha"
+    if lab in {"DELTA"}:         return "Flock Aerodome Delta"
+    if lab in {"M350", "M 350"}: return "Flock Aerodome M350"
+    # If already a full platform name, pass through
+    for k in PLATFORMS.keys():
+        if lab == str(k).strip().upper():
+            return k
+    return "Flock Aerodome Dock 3"
+
+# Determine default selection from launch rows
+_default_platform = "Flock Aerodome Dock 3"
 try:
-  if "Dock Type" in launch_df.columns:
-    _dock_types = (
-      launch_df["Dock Type"]
-        .astype(str).str.strip()
-        .replace({"": None})
-        .dropna()
-        .str.title()  # 'DOCK 3'/'dock 3' → 'Dock 3'
-    )
-    if not _dock_types.empty:
-      _default_platform_name = _dock_types.mode().iat[0]
+    if "Dock Type" in launch_df.columns:
+        _dock_mode = (
+            launch_df["Dock Type"].astype(str).str.strip().replace({"": None}).dropna().mode()
+        )
+        if not _dock_mode.empty:
+            _default_platform = _dock_label_to_platform(_dock_mode.iat[0])
 except Exception:
-  pass
+    pass
 
-# Look up specs from PLATFORMS if available
-_specs = {}
-try:
-  # Normalize keys in PLATFORMS to allow case-insensitive lookup
-  if "PLATFORMS" in globals() and isinstance(PLATFORMS, dict):
-    _lookup = {str(k).strip().title(): v for k, v in PLATFORMS.items()}
-    _specs = (_lookup.get(_default_platform_name, {}) or {}).get("specs", {}) or {}
-except Exception:
-  _specs = {}
+FLOCK_PLATFORMS = [k for k in PLATFORMS.keys() if str(k).startswith("Flock ")]
 
-# Pull numbers from specs; keep robust fallbacks
-DOCK3_SPEED_FALLBACK = 47.0  # mph (updated per Dock 3 real-world)
-DOCK3_RANGE_FALLBACK = 3.5   # miles
-
-spec_speed = _spec_number(_specs, ["Real-world Speed (MPH)", "Speed (MPH)", "Speed"])
-spec_range = _spec_number(_specs, ["Range (Miles)", "Real-world Range (Miles)", "Effective Range (Miles)", "Range"])
-
-default_speed = float(a.get("drone_speed_mph", spec_speed if spec_speed is not None else DOCK3_SPEED_FALLBACK))
-default_range = float(a.get("drone_range_miles", spec_range if spec_range is not None else DOCK3_RANGE_FALLBACK))
-
-drone_speed  = st.sidebar.number_input(
-    f"Drone Speed (mph) — default from {_default_platform_name}",
-    value=default_speed,
-    step=1.0
+# Global pricing/docks override toggle (show this before platform selection)
+override_launch_pricing = st.sidebar.checkbox(
+    "Override Launch Locations sheet (pricing/docks)",
+    value=st.session_state.get("override_launch_pricing", False),
+    help="When enabled, applies the selected price per dock and docks per location to pricing and totals."
 )
-drone_range  = st.sidebar.number_input(
-    f"Drone Range (miles) — default from {_default_platform_name}",
-    value=default_range,
-    step=0.1
+
+selected_platform = st.sidebar.selectbox(
+    "Drone Platform",
+    options=FLOCK_PLATFORMS,
+    index=(FLOCK_PLATFORMS.index(_default_platform) if _default_platform in FLOCK_PLATFORMS else 0),
+    help="Select the drone platform to use for range, speed, and pricing.",
+    disabled=not override_launch_pricing,
 )
+
+_specs = (PLATFORMS.get(selected_platform, {}) or {}).get("specs", {}) or {}
+DOCK3_SPEED_FALLBACK = 47.0
+DOCK3_RANGE_FALLBACK = 3.5
+spec_speed = _spec_number(_specs, ["Real-world Speed (MPH)", "Speed (MPH)", "Speed"]) or DOCK3_SPEED_FALLBACK
+spec_range = PLATFORMS.get(selected_platform, {}).get("range_mi", DOCK3_RANGE_FALLBACK)
+
+st.sidebar.caption("Selected Drone Specs (configurable)")
+
+# Base defaults from platform
+_default_price_per_dock = int(PLATFORMS.get(selected_platform, {}).get('price_per_dock', 0) or 0)
+_default_docks_per_loc  = int(PLATFORMS.get(selected_platform, {}).get('docks_per_location', 1) or 1)
+
+# Configurable inputs with platform defaults
+drone_range  = st.sidebar.number_input("Range (miles)", value=float(spec_range), step=0.1, disabled=not override_launch_pricing)
+drone_speed  = st.sidebar.number_input("Speed (mph)",  value=float(spec_speed), step=1.0, disabled=not override_launch_pricing)
+price_per_dock_sel = st.sidebar.number_input(
+    "Price per dock (USD)", value=int(_default_price_per_dock), step=1000,
+    disabled=not override_launch_pricing
+)
+docks_per_loc_sel  = st.sidebar.number_input(
+    "Docks per location", value=int(_default_docks_per_loc), step=1,
+    disabled=not override_launch_pricing
+)
+
+# Persist selections for use in downstream pricing functions
+st.session_state["selected_platform"] = selected_platform
+st.session_state["selected_range_mi"] = float(drone_range)
+st.session_state["selected_speed_mph"] = float(drone_speed)
+st.session_state["override_launch_pricing"] = bool(override_launch_pricing)
+st.session_state["selected_price_per_dock"] = int(price_per_dock_sel)
+st.session_state["selected_docks_per_location"] = int(docks_per_loc_sel)
 
 progress.progress(70)
 
@@ -2240,6 +2063,21 @@ progress.progress(70)
 with st.sidebar.expander("Agency details", expanded=True):
     analyst_name = st.text_input("Analyst (optional)", value="", key="analyst_name")
     run_notes = st.text_area("Run notes (optional)", height=80, key="run_notes")
+
+# ─── Set Up (PowerPoint layout) ─────────────────────────────────────────────
+st.markdown("---")
+st.header("Set Up")
+c1, c2 = st.columns([2, 1])
+with c1:
+    st.markdown(f"**Agency Name:** {AGENCY_NAME or '—'}")
+    st.markdown(
+        "Get agency logo and remove background: "
+        "<a href='https://www.remove.bg/' target='_blank'>remove.bg ↗</a>",
+        unsafe_allow_html=True,
+    )
+with c2:
+    _deck_type = "Minimal deck template" if st.session_state.get("raw_is_minimal", False) else "Full deck template"
+    st.metric("Template", _deck_type)
 
 st.sidebar.header("5) ALPR & Audio (optional)")
 
@@ -2674,6 +2512,27 @@ dispatch_dt = dispatch_dt[valid]
 arrive_dt   = arrive_dt[valid]
 close_dt    = close_dt[valid]
 
+# --- Midnight rollover fix for time-of-day inputs ---------------------------
+# If any subsequent timestamp is earlier than the previous one, assume it rolled past midnight.
+try:
+    mask = dispatch_dt.notna() & create_dt.notna() & (dispatch_dt < create_dt)
+    if mask.any():
+        dispatch_dt.loc[mask] = dispatch_dt.loc[mask] + pd.to_timedelta(1, unit="D")
+except Exception:
+    pass
+try:
+    mask = arrive_dt.notna() & dispatch_dt.notna() & (arrive_dt < dispatch_dt)
+    if mask.any():
+        arrive_dt.loc[mask] = arrive_dt.loc[mask] + pd.to_timedelta(1, unit="D")
+except Exception:
+    pass
+try:
+    mask = close_dt.notna() & arrive_dt.notna() & (close_dt < arrive_dt)
+    if mask.any():
+        close_dt.loc[mask] = close_dt.loc[mask] + pd.to_timedelta(1, unit="D")
+except Exception:
+    pass
+
 patrol_sec  = (arrive_dt - create_dt).dt.total_seconds()
 onscene_sec = (close_dt  - arrive_dt).dt.total_seconds()
 lat = pd.to_numeric(raw_df[col_lat], errors="coerce")
@@ -2702,7 +2561,8 @@ except Exception:
     st.stop()
 
 dist_mi       = haversine_min(lat.values, lon.values, launch_coords)
-drone_eta_sec = dist_mi / max(drone_speed,1e-9) * 3600
+_spd = float(st.session_state.get("selected_speed_mph", drone_speed))
+drone_eta_sec = dist_mi / max(_spd,1e-9) * 3600
 progress.progress(90)
 
 df_all = pd.DataFrame({
@@ -2718,6 +2578,10 @@ df_all = pd.DataFrame({
 
 # normalize every column name to lowercase (and strip any stray spaces)
 df_all.columns = df_all.columns.str.lower().str.strip()
+
+# Ensure only valid coordinates proceed to mapping/metrics
+# (Folium HeatMap raises if any lat/lon are NaN.)
+df_all = df_all.dropna(subset=["lat", "lon"]).copy()
 
 # ─── 2f) Drop any rows with missing or non-positive patrol response
 df_all = df_all[df_all["patrol_sec"] > 0].copy()
@@ -2742,8 +2606,9 @@ dfr_only  = df_all[
     df_all["call_type_up"].isin(dfr_map)
 ].copy()
 
-in_range  = dfr_only[
-    dfr_only["dist_mi"] <= drone_range
+_rng = float(st.session_state.get("selected_range_mi", drone_range))
+in_range = dfr_only[
+    dfr_only["dist_mi"] <= _rng
 ].copy()
 
 clearable = in_range[
@@ -2829,7 +2694,8 @@ if alpr_df is not None and not alpr_df.empty:
 
     # distance to nearest launch & in-range mask
     dist = haversine_min(lat_a, lon_a, launch_coords)
-    in_range_mask = (dist <= drone_range) & np.isfinite(dist)
+    _rng = float(st.session_state.get("selected_range_mi", drone_range))
+    in_range_mask = (dist <= _rng) & np.isfinite(dist)
 
     # 1) SITES: count ALL unique camera names that are in range (no reason filter)
     alpr_sites = int(pd.Series(cam_names[in_range_mask]).nunique())
@@ -2851,7 +2717,8 @@ if alpr_df is not None and not alpr_df.empty:
     alpr_hits = int(hits[ok_mask].sum())
 
     # 3) ETA (hits-weighted) for whitelisted, in-range rows
-    etas_sec = dist / max(drone_speed, 1e-9) * 3600
+    _spd = float(st.session_state.get("selected_speed_mph", drone_speed))
+    etas_sec = dist / max(_spd, 1e-9) * 3600
     denom = hits[ok_mask].sum()
     alpr_eta = float((etas_sec[ok_mask] * hits[ok_mask]).sum() / denom) if denom > 0 else np.nan
 
@@ -2904,7 +2771,8 @@ if audio_df is not None and not audio_df.empty:
 
         # Distances to nearest launch + in-range mask (stats use in-range only)
         dist2   = haversine_min(lat_v.values, lon_v.values, launch_coords)
-        in_rng2 = (dist2 <= drone_range) & np.isfinite(dist2)
+        _rng = float(st.session_state.get("selected_range_mi", drone_range))
+        in_rng2 = (dist2 <= _rng) & np.isfinite(dist2)
 
         # ── METRICS (IN-RANGE) ───────────────────────────────────────────────
         # 1) Unique audio locations (addresses) in range
@@ -2914,7 +2782,9 @@ if audio_df is not None and not audio_df.empty:
         audio_hits = int(hits_v[in_rng2].sum())
 
         # 3) Hits-weighted average ETA in range
-        etas_sec = dist2 / max(drone_speed, 1e-9) * 3600  # seconds
+        # Use selected speed if provided
+        _spd = float(st.session_state.get("selected_speed_mph", drone_speed))
+        etas_sec = dist2 / max(_spd, 1e-9) * 3600  # seconds
         w_sum    = hits_v[in_rng2].sum()
         audio_eta = float((etas_sec[in_rng2] * hits_v[in_rng2]).sum() / w_sum) if w_sum > 0 else np.nan
 
@@ -2942,15 +2812,63 @@ avg_scene    = average(dfr_only["onscene_sec"])
 avg_in       = average(in_range["patrol_sec"])
 avg_p1_pat   = average(in_range.loc[in_range["priority"]=="1","patrol_sec"])
 avg_p1_drone = average(in_range.loc[in_range["priority"]=="1","drone_eta_sec"])
-avg_clr      = average(clearable["onscene_sec"])
+avg_clr      = average(clearable["onscene_sec"]) if "onscene_sec" in clearable.columns else np.nan
+
+# Fallback path: if we are in minimal mode (no real arrive/close)
+# OR there are no usable on-scene timestamps, assume 55 minutes.
+_AVG_CLR_FALLBACK_SEC = 55 * 60
+def _has_col(colname: str | None) -> bool:
+    try:
+        return bool(colname) and (str(colname) in raw_df.columns)
+    except Exception:
+        return False
+
+try:
+    _no_real_phase_times = bool(
+        _minimal_mode or not (_has_col(col_arrive) and _has_col(col_close))
+    )
+except Exception:
+    _no_real_phase_times = True
+
+try:
+    _onscene_present = (
+        "onscene_sec" in clearable.columns and
+        pd.to_numeric(clearable["onscene_sec"], errors="coerce").notna().any()
+    )
+except Exception:
+    _onscene_present = False
+
+_use_clr_fallback = _no_real_phase_times or not _onscene_present or not np.isfinite(avg_clr)
+avg_clr_effective = (avg_clr if not _use_clr_fallback else _AVG_CLR_FALLBACK_SEC)
 
 first_on_pct = float(np.mean(in_range["drone_eta_sec"] < in_range["patrol_sec"]) * 100) if in_count else np.nan
 pct_dec      = ((avg_in-avg_drone)/avg_in*100) if avg_in>0 else np.nan
 alpr_rate   = get_alpr_clear_rate()  # applies to ALPR + Audio hits
 exp_cleared = int(round(in_count * cancel_rate + dfr_alpr_audio * alpr_rate))
-time_saved   = avg_clr * exp_cleared
+time_saved   = avg_clr_effective * exp_cleared
 officers     = (time_saved/3600)/fte_hours if fte_hours>0 else np.nan
 roi          = officers * officer_cost if np.isfinite(officers) else np.nan
+
+# ─── Summary (PowerPoint layout) ─────────────────────────────────────────────
+st.markdown("---")
+st.header("Summary")
+_m1, _m2, _m3 = st.columns(3)
+_m1.metric("Total CFS", f"{int(total_cfs):,}")
+_m2.metric(
+    "Total ALPR + Audio Hits",
+    f"{int(total_alpr_audio) if 'total_alpr_audio' in locals() else int((alpr_hits if 'alpr_hits' in locals() else 0) + (audio_hits if 'audio_hits' in locals() else 0)):,}"
+)
+_m3.metric("DFR Responses to CFS within range", f"{int(in_count):,}")
+
+_m4, _m5, _m6 = st.columns(3)
+_m4.metric("DFR Responses to ALPR and Audio within range", f"{int(dfr_alpr_audio):,}")
+_m5.metric("Avg Response Time", pretty_value(avg_drone, "mmss"))
+_m6.metric("First On Scene %", pretty_value(first_on_pct, "pct"))
+
+_m7, _m8, _m9 = st.columns(3)
+_m7.metric("Expected CFS and ALPR + Audio Calls Cleared", f"{int(exp_cleared):,}")
+_m8.metric("Force Multiplication", pretty_value(officers, "2dec"))
+_m9.metric("ROI", pretty_value(roi, "usd"))
 
 rows = [
     ("Total CFS",                                           total_cfs,       "int"),
@@ -2990,9 +2908,9 @@ rows = [
     ("Number of Officers - Force Multiplication",           officers,        "2dec"),  # same again per original
     ("ROI from Potential Calls Cleared",                    roi,             "usd"),   # same again per original
     ("Total clearable CFS within range",                    clr_count,       "int"),
-    ("Total time spent on Clearable CFS",                   clr_count * avg_clr, "hhmmss"),
+    ("Total time spent on Clearable CFS",                   clr_count * avg_clr_effective, "hhmmss"),
 
-    ("Avg Time on Scene – Clearable Calls",                 avg_clr,         "mmss"),
+    ("Avg Time on Scene – Clearable Calls",                 (avg_clr if not _use_clr_fallback else avg_clr_effective),         "mmss"),
 ]
 
 
@@ -3175,8 +3093,9 @@ try:
         "audio_hits_in_range": int(audio_hits) if 'audio_hits' in locals() else 0,
         "audio_eta_sec": float(audio_eta) if ('audio_eta' in locals() and np.isfinite(audio_eta)) else None,
         "clearable_in_range": int(clr_count),
-        "avg_clearable_scene_sec": float(avg_clr) if np.isfinite(avg_clr) else None,
-        "total_time_on_clearable_sec": float(clr_count * avg_clr) if np.isfinite(avg_clr) else None,
+        # Persist effective values so saved runs reflect the assumed 55-min fallback when timestamps are missing
+        "avg_clearable_scene_sec": float(avg_clr_effective) if np.isfinite(avg_clr_effective) else None,
+        "total_time_on_clearable_sec": float(clr_count * avg_clr_effective) if np.isfinite(avg_clr_effective) else None,
         "alpr_clear_rate": float(get_alpr_clear_rate()),
     }
 
@@ -3191,8 +3110,12 @@ try:
             "officer_cost_usd": int(officer_cost),
             "cancel_rate": float(cancel_rate),
             "alpr_clear_rate": float(get_alpr_clear_rate()),
-            "drone_speed_mph": float(drone_speed),
-            "drone_range_miles": float(drone_range),
+            "drone_speed_mph": float(st.session_state.get("selected_speed_mph", drone_speed)),
+            "drone_range_miles": float(st.session_state.get("selected_range_mi", drone_range)),
+            "price_per_dock_usd": int(st.session_state.get("selected_price_per_dock", 0) or 0),
+            "docks_per_location": int(st.session_state.get("selected_docks_per_location", 1) or 1),
+            "apply_price_override": bool(st.session_state.get("apply_price_override", False)),
+            "selected_platform": st.session_state.get("selected_platform", ""),
         },
         "launch_sites_count": len(launch_coords) if 'launch_coords' in locals() else 0,
         "hotspot": {
@@ -3367,7 +3290,8 @@ if audit_on:
         _rsn  = alpr_df["Reason"].astype(str).str.upper().str.strip()
         _valid = _alat.notna() & _alon.notna()
         _dist  = haversine_min(_alat[_valid].values, _alon[_valid].values, launch_coords)
-        _inrng = (_dist <= drone_range) & np.isfinite(_dist)
+        _rng = float(st.session_state.get("selected_range_mi", drone_range))
+        _inrng = (_dist <= _rng) & np.isfinite(_dist)
         _dfprev = pd.DataFrame({
             "lat": _alat[_valid].values,
             "lon": _alon[_valid].values,
@@ -3394,37 +3318,7 @@ if audit_on:
     })
 
 # ─── 5.5) TOP SUMMARY (matches PDF headline metrics) ─────────────────────────
-st.markdown("---")
-st.markdown("### Summary")
-
-def metric_row(*pairs):
-    cols = st.columns(len(pairs))
-    for c, (label, value, kind) in zip(cols, pairs):
-        c.metric(label, pretty_value(value, kind))
-
-# Row 1 — headline ops metrics
-metric_row(
-    ("Total CFS", total_cfs, "int"),
-    ("Total Potential DFR Calls", total_dfr, "int"),
-    ("DFR Responses within Range", in_count, "int"),
-    ("DFR + ALPR/Audio (in-range)", dfr_alpr_audio, "int"),
-)
-
-# Row 2 — time/impact highlights
-metric_row(
-    ("Expected DFR Drone Response (avg)", avg_drone, "mmss"),
-    ("Avg Patrol Response to In-Range Calls", avg_in, "mmss"),
-    ("Expected First on Scene %", first_on_pct, "pct"),
-    ("Expected Decrease in Response Times", pct_dec, "pct"),
-)
-
-# Row 3 — outcomes
-metric_row(
-    ("Expected CFS Cleared", exp_cleared, "int"),
-    ("Officers (FTE) Saved", officers, "2dec"),
-    ("ROI (USD)", roi, "usd"),
-    ("Clearable CFS In Range", clr_count, "int"),
-)
+## Removed old summary section (replaced by new Summary above)
 
 # ==== FAA overlay data (load once per run) ===================================
 _lats = list(df_all["lat"].dropna().astype(float).values)
@@ -3629,7 +3523,7 @@ def render_map(
         for la, lo in launch_coords:
             folium.Circle(
                 location=(la, lo),
-                radius=drone_range * 1609.34,
+                radius=float(st.session_state.get("selected_range_mi", drone_range)) * 1609.34,
                 color="blue",
                 fill=False
             ).add_to(m)
@@ -3671,7 +3565,10 @@ def render_map(
 
     st_folium(m, width=800, height=500, key=key)
 
-# 6a) Heatmap: All DFR Calls
+# Maps — All DFR Calls
+st.markdown("---")
+st.header("Maps")
+st.subheader("All DFR Calls")
 r0, b0 = auto_heat_params(all_dfr)
 r_all = st.sidebar.slider("All DFR Calls Heat Radius", 1, 50, value=r0, key="all_r")
 b_all = st.sidebar.slider("All DFR Calls Heat Blur",   1, 50, value=b0, key="all_b")
@@ -3679,44 +3576,67 @@ render_map(
     all_dfr,
     heat=True,
     heat_radius=r_all, heat_blur=b_all,
-    title="",
+    title=None,
     key="map_all_heat",
     show_circle=True,
     launch_coords=launch_coords
 )
 metrics_under(
-    "All DFR Calls — key stats",
-    ("Total Potential DFR Calls", total_dfr, "int"),
-    ("DFR within Range", in_count, "int"),
-    ("Avg Patrol (DFR)", avg_patrol, "mmss"),
-    ("Avg DFR Drone Response", avg_drone, "mmss"),
-    ("First on Scene %", first_on_pct, "pct"),
-    ("Decrease in Response Times", pct_dec, "pct"),
+    "",
+    ("Total CFS", total_cfs, "int"),
+    ("Total DFR CFS", total_dfr, "int"),
+    ("Total DFR CFS within Range", in_count, "int"),
+    ("Total DFR ALPR Hits within Range", (alpr_hits if 'alpr_hits' in locals() else 0), "int"),
+    ("Total DFR CFS (again)", total_dfr, "int"),
+    ("Avg Dispatch + Response Time for Patrol (DFR)", avg_patrol, "mmss"),
+    ("Avg Time on Scene DFR Calls", avg_scene, "mmss"),
+    ("Number of Launch Locations", len(launch_rows), "int"),
+    ("Number of Docks", int(pd.to_numeric(launch_rows.get("Number of Docks", 0), errors="coerce").fillna(0).sum()), "int"),
+    ("Number of Radar", int(pd.to_numeric(launch_rows.get("Number of Radar", 0), errors="coerce").fillna(0).sum()), "int"),
 )
 
 st.markdown("---")
 
-# 6b) 3.5-mile Drone Range (circle only)
+# 6b) Flock Aerodome DFR Coverage Area (circle only)
+st.subheader("Flock Aerodome DFR Coverage Area")
 render_map(
     pd.DataFrame(),
     heat=False,
-    title="",
+    title=None,
     key="map_range_circle",
     show_circle=True,
     launch_coords=launch_coords
 )
-metrics_under(
-    "Range — key stats",
-    ("DFR within Range", in_count, "int"),
-    ("Avg DFR Drone Response (in-range)", avg_drone, "mmss"),
-    ("P1 Calls in Range", p1_count, "int"),
-    ("Avg P1 Patrol (in-range)", avg_p1_pat, "mmss"),
-    ("Avg P1 Drone Response (in-range)", avg_p1_drone, "mmss"),
-)
+# no stats row under coverage circle per layout
 
 st.markdown("---")
 
+st.subheader("All DFR Calls within Range (zoom into map)")
+# Render in-range map (heat)
+r_ir, b_ir = auto_heat_params(in_range)
+r_ir = st.sidebar.slider("In-Range Heat Radius", 1, 50, value=r_ir, key="inrng_r")
+b_ir = st.sidebar.slider("In-Range Heat Blur",   1, 50, value=b_ir, key="inrng_b")
+render_map(
+    in_range,
+    heat=True,
+    heat_radius=r_ir, heat_blur=b_ir,
+    title=None,
+    key="map_inrange_heat",
+    show_circle=True,
+    launch_coords=launch_coords
+)
+metrics_under(
+    "",
+    ("DFR Avg Response Time", avg_drone, "mmss"),
+    ("Expected First On Scene %", first_on_pct, "pct"),
+    ("Expected Reduction in Response Times", pct_dec, "pct"),
+    ("Number of DFR CFS within Range", in_count, "int"),
+    ("Avg Dispatch + Response Time (in-range)", avg_in, "mmss"),
+    ("Avg Expected DFR Response Time (in-range)", avg_drone, "mmss"),
+)
+
 # 6c) Heatmap: P1 DFR Calls
+st.subheader("P1 Calls for Service")
 r_p1 = st.sidebar.slider("P1 DFR Heat Radius", 1, 50, value=9, key="p1_r")
 b_p1 = st.sidebar.slider("P1 DFR Heat Blur",   1, 50, value=9, key="p1_b")
 render_map(
@@ -3729,15 +3649,16 @@ render_map(
     launch_coords=launch_coords
 )
 metrics_under(
-    "P1 — key stats",
-    ("P1 Calls in Range", p1_count, "int"),
-    ("Avg P1 Patrol (in-range)", avg_p1_pat, "mmss"),
-    ("Avg P1 Drone Response (in-range)", avg_p1_drone, "mmss"),
+    "",
+    ("Number of P1 Calls in Range", p1_count, "int"),
+    ("Avg Dispatch + Response Time to P1 Calls", avg_p1_pat, "mmss"),
+    ("Avg Expected DFR Response Time to P1 Calls", avg_p1_drone, "mmss"),
 )
 
 st.markdown("---")
 
 # 6d) Heatmap: All DFR Calls + Hotspot Overlay
+st.subheader("Hotspots")
 if hotspot_coords:
     r_hs, b_hs = auto_heat_params(all_dfr)
     r_hs = st.sidebar.slider("Hotspot Heat Radius", 1, 50, value=r_hs, key="hs_r")
@@ -3755,34 +3676,17 @@ if hotspot_coords:
         hotspot_radius=0.5
     )
     metrics_under(
-        "Hotspot — key stats (≤ 0.5 mi)",
-        ("DFR Calls in Hotspot", hotspot_count, "int"),
-        ("Avg Patrol (hotspot)", hotspot_avg_patrol, "mmss"),
-        ("Avg Drone Response (hotspot)", hotspot_avg_drone, "mmss"),
+        "",
+        ("Number of DFR Calls in Hotspot", hotspot_count, "int"),
+        ("Avg Dispatch + Response Time (hotspot)", hotspot_avg_patrol, "mmss"),
+        ("Avg Expected DFR Response Time (hotspot)", hotspot_avg_drone, "mmss"),
     )
     st.markdown("---")
 
-# 6e) Heatmap: Clearable DFR Calls
-r2, b2 = auto_heat_params(all_clearable)
-r_cl = st.sidebar.slider("Clearable Heat Radius", 1, 50, value=r2, key="clr_r")
-b_cl = st.sidebar.slider("Clearable Heat Blur",   1, 50, value=b2, key="clr_b")
-render_map(
-    all_clearable,
-    heat=True,
-    heat_radius=r_cl, heat_blur=b_cl,
-    title="",
-    key="map_clearable_heat",
-    show_circle=True,
-    launch_coords=launch_coords
-)
-metrics_under(
-    "Clearable — key stats",
-    ("Clearable CFS in Range", clr_count, "int"),
-    ("Avg Time on Scene (clearable)", avg_clr, "mmss"),
-    ("Expected CFS Cleared", exp_cleared, "int"),
-    ("Officers (FTE)", officers, "2dec"),
-    ("ROI (USD)", roi, "usd"),
-)
+## Removed headline metrics rows for ALPR/Audio — maps below already carry metrics elsewhere
+
+# 6g) Clearable Calls for Service
+## Clearable metrics moved below ALPR/Audio and heatmap re-added there
 
 st.markdown("---")
 
@@ -3800,16 +3704,16 @@ if alpr_df is not None:
         alpr_pts,
         heat=True,
         heat_radius=r_al, heat_blur=b_al,
-        title="",
+        title="ALPR Heat Map",
         key="map_alpr_heat",
         show_circle=True,
         launch_coords=launch_coords
     )
     metrics_under(
-        "ALPR — key stats (in-range rules applied for metrics)",
-        ("ALPR Sites (in-range)", alpr_sites, "int"),
-        ("Hits (whitelist, in-range)", alpr_hits, "int"),
-        ("Avg Drone Response (hits-weighted)", alpr_eta, "mmss"),
+        "",
+        ("# of ALPR Locations in Range", (alpr_sites if 'alpr_sites' in locals() else 0), "int"),
+        ("# of hits", (alpr_hits if 'alpr_hits' in locals() else 0), "int"),
+        ("Average Expected Drone Response Time", (alpr_eta if 'alpr_eta' in locals() else np.nan), "mmss"),
     )
     st.markdown("---")
 
@@ -3822,24 +3726,50 @@ if audio_pts is not None and not audio_pts.empty:
         audio_pts,
         heat=True,
         heat_radius=r_au, heat_blur=b_au,
-        title="",
+        title="Audio Heatmap",
         key="map_audio_heat",
         show_circle=True,
         launch_coords=launch_coords
     )
     metrics_under(
-        "Audio — key stats (in-range rules applied for metrics)",
-        ("Audio Locations (in-range)", audio_sites, "int"),
-        ("Audio Hits (in-range)", audio_hits, "int"),
-        ("Avg Drone Response (hits-weighted)", audio_eta, "mmss"),
+        "",
+        ("# of Audio Locations in Range", (audio_sites if 'audio_sites' in locals() else 0), "int"),
+        ("# of hits", (audio_hits if 'audio_hits' in locals() else 0), "int"),
+        ("Average Expected Drone Response Time", (audio_eta if 'audio_eta' in locals() else np.nan), "mmss"),
     )
 else:
     st.sidebar.info("No audio points to display on the heatmap.")
 
+st.markdown("---")
+st.subheader("Clearable Calls for Service")
+r2, b2 = auto_heat_params(all_clearable)
+r_cl = st.sidebar.slider("Clearable Heat Radius", 1, 50, value=r2, key="clr_r")
+b_cl = st.sidebar.slider("Clearable Heat Blur",   1, 50, value=b2, key="clr_b")
+render_map(
+    all_clearable,
+    heat=True,
+    heat_radius=r_cl, heat_blur=b_cl,
+    title=None,
+    key="map_clearable_heat",
+    show_circle=True,
+    launch_coords=launch_coords
+)
+metrics_under(
+    "",
+    ("Expected Number of CFS and Alerts Cleared", exp_cleared, "int"),
+    ("Number of Officers (Force Multiplication)", officers, "2dec"),
+    ("ROI", roi, "usd"),
+    ("Full Time Equivalent Cost Used", officer_cost, "usd"),
+    ("Call Clearance Rate Used", cancel_rate * 100.0, "pct"),
+    ("ALPR Clearance Rate Used", alpr_rate * 100.0, "pct"),
+    ("Total Clearable CFS by Drone within Range", clr_count, "int"),
+    ("Total Time Spent on Clearable CFS", clr_count * avg_clr_effective, "hhmmss"),
+)
 
 # ─── 7) PRICING ───────────────────────────────────────────────────────────────
-st.markdown("---")
-st.header("Pricing")
+if False:  # Pricing section hidden (redundant in new layout)
+    st.markdown("---")
+    st.header("Pricing")
 
 # --- Yearly unit prices (no CapEx) ---
 PRICE_PER_DOCK_BY_TYPE = {
@@ -3891,6 +3821,17 @@ def dock_unit_price(dock_type):
     return PRICE_PER_DOCK_BY_TYPE.get(str(dock_type).upper().strip(), 0)
 
 _lr["Dock Unit Price"]   = _lr["Dock Type"].map(dock_unit_price)
+# Apply global selections only when override is enabled; else use sheet as-is
+try:
+    if st.session_state.get("override_launch_pricing"):
+        sel_price = int(st.session_state.get("selected_price_per_dock", 0) or 0)
+        if sel_price > 0:
+            _lr["Dock Unit Price"] = int(sel_price)
+        sel_docks = int(st.session_state.get("selected_docks_per_location", 1) or 1)
+        if sel_docks > 0:
+            _lr["Number of Docks"] = sel_docks
+except Exception:
+    pass
 _lr["Dock Yearly Cost"]  = (_lr["Number of Docks"] * _lr["Dock Unit Price"]).astype(int)
 _lr["Radar Yearly Cost"] = (_lr["Number of Radar"] * PRICE_PER_RADAR).astype(int)
 _lr["Site Yearly Total"] = (_lr["Dock Yearly Cost"] + _lr["Radar Yearly Cost"]).astype(int)
@@ -3916,70 +3857,39 @@ discounted_400 = int(list_total_400 - disc_400)
 
 # Recommended dock type(s): based on CSV values present
 present_types = [t for t in _lr["Dock Type"].unique().tolist() if t]
-if len(present_types) > 1:
-    top_type = (_lr.groupby("Dock Type")["Number of Docks"].sum().sort_values(ascending=False).index.tolist() or [""])[0]
-    recommended_label = f"{', '.join(present_types)}  (top: {top_type})"
+if st.session_state.get("override_launch_pricing"):
+    # When overriding, recommend the selected platform
+    recommended_label = st.session_state.get("selected_platform", present_types[0] if present_types else "—")
 else:
-    recommended_label = present_types[0] if present_types else "—"
+    if len(present_types) > 1:
+        top_type = (
+            _lr.groupby("Dock Type")["Number of Docks"].sum().sort_values(ascending=False).index.tolist() or [""]
+        )[0]
+        recommended_label = f"{', '.join(present_types)}  (top: {top_type})"
+    else:
+        recommended_label = present_types[0] if present_types else "—"
 
-# --- Pricing map (its own rendering) ---
-st.subheader("Pricing Map (Launch Sites + Range)")
-pricing_pts = pd.DataFrame({
-    "lat": pd.to_numeric(_lr["Lat"], errors="coerce"),
-    "lon": pd.to_numeric(_lr["Lon"], errors="coerce")
-}).dropna(subset=["lat","lon"])
-render_map(
-    pricing_pts,
-    heat=False,
-    title="",
-    key="map_pricing",
-    show_circle=True,
-    launch_coords=launch_coords
-)
-
-# --- Summary row ---
+# Pricing visuals removed per new layout; calculations retained for downstream use
 def _fmt_usd(x): return f"${x:,.0f}"
-
-c1, c2, c3, c4 = st.columns(4)
-c1.metric("Launch Locations", f"{total_launch_sites:,}")
-c2.metric("Total Docks", f"{total_docks:,}")
-c3.metric("Total Radars", f"{total_radars:,}")
-c4.metric("Recommended Dock Type(s)", recommended_label)
-
-# Two-tier pricing
-c5, c6 = st.columns(2)
-c5.metric("Yearly Cost @200 ft (List)", _fmt_usd(list_total_200))
-c6.metric("Yearly Cost @400 ft (List)", _fmt_usd(list_total_400))
-
-if discount_pct > 0:
-    c7, c8 = st.columns(2)
-    c7.metric(f"Yearly Cost @200 ft (Disc {int(discount_pct)}%)", _fmt_usd(discounted_200))
-    c8.metric(f"Yearly Cost @400 ft (Disc {int(discount_pct)}%)", _fmt_usd(discounted_400))
-
-# --- Expandable per-site breakdown ---
-with st.expander("Per-site pricing details"):
-    detail_df = _lr[[
-        "Location Name", "Address", "Dock Type", "Number of Docks", "Dock Unit Price",
-        "Dock Yearly Cost", "Number of Radar", "Radar Yearly Cost", "Site Yearly Total"
-    ]].copy()
-    # Nice formatting for display
-    _money_cols = ["Dock Unit Price", "Dock Yearly Cost", "Radar Yearly Cost", "Site Yearly Total"]
-    for mc in _money_cols:
-        detail_df[mc] = detail_df[mc].map(lambda v: _fmt_usd(int(v)))
-
-    st.dataframe(detail_df, use_container_width=True)
-
-    # Totals row (rendered separately under the table)
-    st.caption(
-        f"**Totals:** Docks={total_docks:,} • Radars={total_radars:,} • "
-        f"@200ft List={_fmt_usd(list_total_200)} • @400ft List={_fmt_usd(list_total_400)}"
-        + (f" • @200ft Disc={_fmt_usd(discounted_200)} • @400ft Disc={_fmt_usd(discounted_400)}"
-        if discount_pct > 0 else "")
-    )
 
 # ─── 7) COMPARISON (no GeoPandas; city limits from call data) ────────────────
 st.markdown("---")
 st.header("Comparison")
+
+# Top-of-comparison headline metrics (before maps & competitor selector)
+_cmp_m1, _cmp_m2 = st.columns(2)
+try:
+    # Use session_state values if present; else compute from current cached values
+    cmp_our_locs  = int(st.session_state.get("cmp_our_locs")) if st.session_state.get("cmp_our_locs") is not None else None
+    cmp_comp_locs = int(st.session_state.get("cmp_comp_locs")) if st.session_state.get("cmp_comp_locs") is not None else None
+    cmp_our_cost  = float(st.session_state.get("cmp_our_cost_200")) if st.session_state.get("cmp_our_cost_200") is not None else None
+    cmp_comp_cost = float(st.session_state.get("cmp_comp_cost_200")) if st.session_state.get("cmp_comp_cost_200") is not None else None
+    pct_fewer = (1.0 - (cmp_our_locs / cmp_comp_locs)) * 100.0 if (cmp_our_locs and cmp_comp_locs and cmp_comp_locs>0) else np.nan
+    pct_lower = (1.0 - (cmp_our_cost / cmp_comp_cost)) * 100.0 if (cmp_our_cost and cmp_comp_cost and cmp_comp_cost>0) else np.nan
+except Exception:
+    pct_fewer, pct_lower = np.nan, np.nan
+_cmp_m1.metric("% Fewer Launch Locations Required", pretty_value(pct_fewer, "pct"))
+_cmp_m2.metric("% Lower Cost", pretty_value(pct_lower, "pct"))
 
 st.markdown(
     """
@@ -4414,7 +4324,7 @@ detected_types_list = sorted(set(_normalized_dock_types()))
 is_multi = len(detected_types_list) > 1
 aerodome_title = f"Flock Aerodome — {'Multi-platform' if is_multi else detected_types_list[0].split('Flock Aerodome ',1)[-1]}"
 
-our_eff_range = max(PLATFORMS[t]["range_mi"] for t in detected_types_list) if detected_types_list else 3.5
+our_eff_range = float(st.session_state.get("selected_range_mi", drone_range))
 OUR_AREA_SQMI_EST = len(launch_coords) * math.pi * (our_eff_range ** 2)
 
 # ---------- Polygons (for drawing/placement only, not math) ----------
@@ -4457,8 +4367,26 @@ def compute_our_yearly_prices_no_discount():
         return 0, 0
     _rows = launch_rows.copy()
     _rows["_docks"]      = pd.to_numeric(docks_col, errors="coerce").fillna(0).astype(int) if docks_col  is not None else 0
+    try:
+        if st.session_state.get("override_launch_pricing"):
+            sel_docks = int(st.session_state.get("selected_docks_per_location", 1) or 1)
+            if sel_docks > 0:
+                _rows["_docks"] = sel_docks
+    except Exception:
+        pass
     _rows["_radars"]     = pd.to_numeric(radars_col, errors="coerce").fillna(0).astype(int) if radars_col is not None else 0
-    _rows["_dock_price"] = _rows.apply(_dock_price_for_row, axis=1)
+    # Apply selected price per dock if provided; else map from type
+    try:
+        if st.session_state.get("override_launch_pricing"):
+            sel_price = int(st.session_state.get("selected_price_per_dock", 0) or 0)
+            if sel_price > 0:
+                _rows["_dock_price"] = int(sel_price)
+            else:
+                _rows["_dock_price"] = _rows.apply(_dock_price_for_row, axis=1)
+        else:
+            _rows["_dock_price"] = _rows.apply(_dock_price_for_row, axis=1)
+    except Exception:
+        _rows["_dock_price"] = _rows.apply(_dock_price_for_row, axis=1)
 
     base_docks  = int((_rows["_docks"] * _rows["_dock_price"]).sum())
     base_radars = int(_rows["_radars"].sum() * PRICE_PER_RADAR)
@@ -4598,6 +4526,13 @@ def panel(title, product_names_list, is_left=True, competitor=None):
             # Headline metrics (ours)
             _our_locs  = len(launch_rows)
             _our_docks = int(pd.to_numeric(docks_col, errors="coerce").fillna(0).sum()) if docks_col is not None else 0
+            try:
+                if st.session_state.get("override_launch_pricing"):
+                    sel_docks = int(st.session_state.get("selected_docks_per_location", 1) or 1)
+                    if sel_docks > 0:
+                        _our_docks = len(launch_rows) * sel_docks
+            except Exception:
+                pass
             c1, c2 = st.columns(2)
             c1.metric("Required Locations", f"{_our_locs:,}")
             c2.metric("Total Docks", f"{_our_docks:,}")
@@ -4868,6 +4803,17 @@ if full_city_file:
 
     def _dock_unit_price(dt): return PRICE_PER_DOCK_BY_TYPE.get(str(dt).upper().strip(), 0)
     fj_launch["Dock Unit Price"]   = fj_launch["Dock Type"].map(_dock_unit_price)
+    # Apply selected unit price and docks per location only when override is enabled
+    try:
+        if st.session_state.get("override_launch_pricing"):
+            sel_price = int(st.session_state.get("selected_price_per_dock", 0) or 0)
+            if sel_price > 0:
+                fj_launch["Dock Unit Price"] = int(sel_price)
+            sel_docks = int(st.session_state.get("selected_docks_per_location", 1) or 1)
+            if sel_docks > 0:
+                fj_launch["Number of Docks"] = sel_docks
+    except Exception:
+        pass
     fj_launch["Dock Yearly Cost"]  = (fj_launch["Number of Docks"] * fj_launch["Dock Unit Price"]).astype(int)
     fj_launch["Radar Yearly Cost"] = (fj_launch["Number of Radar"] * PRICE_PER_RADAR).astype(int)
     # Split Aerodome totals for Full City
@@ -4880,6 +4826,13 @@ if full_city_file:
         _fc_our_cost_400 = int((fj_launch["Dock Yearly Cost"] + fj_launch["Radar Yearly Cost"]).sum())
         _fc_our_locs     = int(len(launch_coords_full))
         _fc_our_docks    = int(fj_launch["Number of Docks"].sum())
+        try:
+            if st.session_state.get("override_launch_pricing"):
+                sel_docks = int(st.session_state.get("selected_docks_per_location", 1) or 1)
+                if sel_docks > 0:
+                    _fc_our_docks = _fc_our_locs * sel_docks
+        except Exception:
+            pass
 
         st.session_state["fc_our_locs"]     = _fc_our_locs
         st.session_state["fc_our_docks"]    = _fc_our_docks
@@ -4918,31 +4871,7 @@ if full_city_file:
                     else df_all[["lat","lon"]].values.tolist()
                 )
                 from folium.plugins import HeatMap
-                # sanitize heatmap tuples to avoid NaNs/non-finite values
-                try:
-                    _cleaned = []
-                    for row in (data or []):
-                        if row is None:
-                            continue
-                        try:
-                            la = float(row[0]); lo = float(row[1])
-                        except Exception:
-                            continue
-                        if not (np.isfinite(la) and np.isfinite(lo)):
-                            continue
-                        if len(row) >= 3:
-                            try:
-                                w = float(row[2])
-                                _cleaned.append((la, lo, w))
-                            except Exception:
-                                _cleaned.append((la, lo))
-                        else:
-                            _cleaned.append((la, lo))
-                    data = _cleaned
-                except Exception:
-                    pass
-
-                add_heatmap_safe(m, data, radius=8, blur=12)
+                HeatMap(data, radius=8, blur=12).add_to(m)
             # Draw blue circles for each launch site
             if coords:
                 for la, lo in coords:
